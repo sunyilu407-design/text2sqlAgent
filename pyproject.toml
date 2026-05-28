@@ -1,0 +1,156 @@
+[project]
+name = "micro-genbi"
+version = "0.1.0"
+description = "微分智能数据引擎 - 企业级 Text2SQL 垂直领域智能体"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [
+    { name = "Micro-GenBI Team", email = "team@micro-genbi.example.com" }
+]
+keywords = ["text2sql", "llm", "bi", "data-analysis", "fastapi"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+]
+
+dependencies = [
+    # Web 框架
+    "fastapi>=0.109.0",
+    "uvicorn[standard]>=0.27.0",
+    "starlette>=0.36.0",
+
+    # 数据验证
+    "pydantic>=2.5.0",
+    "pydantic-settings>=2.1.0",
+
+    # 数据库
+    "sqlalchemy>=2.0.25",
+    "asyncpg>=0.29.0",
+    "aiomysql>=0.2.0",
+    "psycopg2-binary>=2.9.9",
+    "pymysql>=1.1.0",
+
+    # SQL 解析
+    "sqlglot>=23.0.0",
+
+    # LLM
+    "openai>=1.10.0",
+    "httpx>=0.27.0",
+    "tenacity>=8.2.0",
+
+    # 配置
+    "pyyaml>=6.0",
+    "python-dotenv>=1.0.0",
+
+    # CLI
+    "typer>=0.12.0",
+    "rich>=13.7.0",
+    "click>=8.1.0",
+
+    # 前端（可选）
+    "streamlit>=1.30.0",
+    "streamlit-echarts>=0.4.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.23.0",
+    "pytest-cov>=4.1.0",
+    "pytest-timeout>=2.2.0",
+    "httpx>=0.27.0",
+    "ruff>=0.2.0",
+    "mypy>=1.8.0",
+    "pre-commit>=3.6.0",
+]
+prediction = [
+    "prophet>=1.1.0",
+    "statsmodels>=0.14.0",
+    "xgboost>=2.0.0",
+    "scikit-learn>=1.4.0",
+]
+memory = [
+    "lancedb>=0.5.0",
+    "sentence-transformers>=2.3.0",
+]
+all = [
+    "micro-genbi[dev,prediction,memory]",
+]
+
+[project.scripts]
+genbi = "micro_genbi.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/example/micro-genbi"
+Documentation = "https://github.com/example/micro-genbi/docs"
+Repository = "https://github.com/example/micro-genbi"
+Issues = "https://github.com/example/micro-genbi/issues"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/micro_genbi"]
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "/src",
+    "/README.md",
+    "/LICENSE",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+filterwarnings = [
+    "ignore::DeprecationWarning",
+    "ignore::PendingDeprecationWarning",
+]
+markers = [
+    "unit: Unit tests",
+    "integration: Integration tests",
+    "slow: Slow running tests",
+]
+
+[tool.coverage.run]
+source = ["src/micro_genbi"]
+branch = true
+omit = [
+    "*/tests/*",
+    "*/migrations/*",
+    "*/__pycache__/*",
+]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "raise NotImplementedError",
+    "if __name__ == .__main__.:",
+    "if TYPE_CHECKING:",
+]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+indent-width = 4
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "N", "UP", "B", "A", "C4", "DTZ", "T10", "ISC"]
+ignore = ["E501", "B008"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["micro_genbi"]
+
+[tool.mypy]
+python_version = "3.11"
+warn_return_any = true
+warn_unused_ignores = true
+disallow_untyped_defs = false
+ignore_missing_imports = true

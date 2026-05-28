@@ -1,0 +1,137 @@
+# =============================================================================
+# Micro-GenBI Schema 配置示例
+#
+# 本文件定义了数据库的语义信息，用于 LLM 生成 SQL 时理解表结构。
+# =============================================================================
+
+schema_version: "1.0"
+
+# ---------------------------------------------------------------------------
+# 表别名映射（英文表名 -> 中文显示名）
+# ---------------------------------------------------------------------------
+table_aliases:
+  orders: "订单表"
+  customers: "客户表"
+  products: "产品表"
+  employees: "员工表"
+  departments: "部门表"
+  tank_inventory: "储罐库存"
+  tank_info: "储罐信息"
+  safety_records: "安全记录"
+
+# ---------------------------------------------------------------------------
+# 语义描述
+# ---------------------------------------------------------------------------
+semantic_descriptions:
+  orders:
+    name: "订单表"
+    description: "包含所有销售订单信息"
+    columns:
+      order_id: "订单ID - 主键"
+      customer_id: "客户ID - 外键"
+      order_date: "下单日期"
+      amount: "订单金额"
+      status: "订单状态: 0=待支付, 1=已支付, 2=已完成, 3=已取消"
+
+  customers:
+    name: "客户表"
+    description: "客户基本信息"
+    columns:
+      customer_id: "客户ID - 主键"
+      customer_name: "客户名称"
+      customer_level: "客户等级: A=VIP, B=普通, C=潜在"
+      phone: "联系电话"
+      email: "邮箱"
+
+  tank_inventory:
+    name: "储罐库存"
+    description: "各储罐的实时库存数据（油库场景）"
+    columns:
+      tank_id: "储罐编号 - 主键"
+      tank_level: "当前液位高度(米)"
+      inventory_amount: "库存数量(吨)"
+      last_update_time: "最后更新时间"
+      status: "状态: normal=正常, alert=预警, alarm=报警"
+
+  safety_records:
+    name: "安全记录"
+    description: "安全检查和报警记录"
+    columns:
+      record_id: "记录ID"
+      tank_id: "储罐编号"
+      record_type: "记录类型: check=巡检, alert=预警, alarm=报警"
+      record_time: "记录时间"
+      description: "描述"
+      handled: "是否处理: true=已处理, false=未处理"
+
+# ---------------------------------------------------------------------------
+# 表关系定义
+# ---------------------------------------------------------------------------
+relationships:
+  - from_table: orders
+    from_column: customer_id
+    to_table: customers
+    to_column: customer_id
+    description: "订单关联客户"
+
+  - from_table: safety_records
+    from_column: tank_id
+    to_table: tank_info
+    to_column: tank_id
+    description: "安全记录关联储罐"
+
+# ---------------------------------------------------------------------------
+# 计算字段
+# ---------------------------------------------------------------------------
+calculated_fields:
+  orders:
+    - name: "order_month"
+      expression: "DATE_TRUNC('month', order_date)"
+      description: "订单月份"
+
+  tank_inventory:
+    - name: "fill_rate"
+      expression: "(tank_level / max_level) * 100"
+      description: "填充率(%)"
+
+# ---------------------------------------------------------------------------
+# 行级访问控制
+# ---------------------------------------------------------------------------
+row_level_access:
+  - role: "admin"
+    condition: "TRUE"
+
+  - role: "operator"
+    condition: "status IN ('normal', 'alert')"
+
+  - role: "readonly"
+    condition: "TRUE"
+    # 只读用户只能看脱敏后的数据
+    mask_fields:
+      - inventory_amount
+      - tank_level
+
+# ---------------------------------------------------------------------------
+# 示例数据（用于 LLM 理解）
+# ---------------------------------------------------------------------------
+sample_values:
+  orders.status:
+    - "0: 待支付"
+    - "1: 已支付"
+    - "2: 已完成"
+    - "3: 已取消"
+
+  customers.customer_level:
+    - "A: VIP客户"
+    - "B: 普通客户"
+    - "C: 潜在客户"
+
+  tank_inventory.status:
+    - "normal: 正常运行"
+    - "alert: 需要关注"
+    - "alarm: 需要立即处理"
+
+  safety_records.record_type:
+    - "check: 巡检记录"
+    - "alert: 预警记录"
+    - "alarm: 报警记录"

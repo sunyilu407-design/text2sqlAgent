@@ -1,0 +1,58 @@
+# =============================================================================
+# Micro-GenBI .dockerignore
+# =============================================================================
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg
+*.egg-info/
+dist/
+build/
+*.whl
+
+# 虚拟环境
+venv/
+env/
+.venv/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# 测试
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.nox/
+
+# Git
+.git/
+.gitignore
+
+# 文档
+*.md
+!README.md
+docs/
+
+# 特定文件
+.env
+.env.local
+*.log
+
+# 临时文件
+tmp/
+temp/
+*.tmp
+
+# 大文件
+*.csv
+*.xlsx
+*.parquet
+data/

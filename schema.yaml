@@ -1,0 +1,321 @@
+# Micro-GenBI Schema 语义配置
+# 用于定义数据库表的语义信息，包括表别名、列描述、枚举值等
+# LLM 会根据这些信息生成更准确的 SQL
+
+schema_version: "1.0"
+
+# 数据库列表（支持多数据库配置）
+databases:
+  # ── 主数据库 ──────────────────────────────────────────────────
+  - id: primary
+    display_name: "主数据库"
+    db_category: primary
+    description: "核心业务数据库"
+    connection:
+      db_type: postgresql
+      # 连接信息由 genbi_config.yaml 提供，这里只放语义描述
+
+    tables:
+      # ── 订单表 ────────────────────────────────────────────────
+      - name: orders
+        logical_name: "订单表"
+        description: "包含所有销售订单的主表"
+        primary_key: id
+        columns:
+          - name: id
+            logical_name: "订单ID"
+            type: INTEGER
+            is_primary_key: true
+            description: "订单唯一标识"
+          - name: order_no
+            logical_name: "订单号"
+            type: VARCHAR(50)
+            description: "业务订单号"
+            sample_values: ["ORD20240501001", "ORD20240502002"]
+          - name: customer_id
+            logical_name: "客户ID"
+            type: INTEGER
+            description: "关联客户表的外键"
+          - name: customer_name
+            logical_name: "客户名称"
+            type: VARCHAR(100)
+            description: "客户名称"
+          - name: order_date
+            logical_name: "订单日期"
+            type: DATE
+            description: "下单日期"
+            sample_values: ["2024-05-01", "2024-05-15"]
+          - name: total_amount
+            logical_name: "订单总额"
+            type: DECIMAL(15,2)
+            description: "订单总金额（含税）"
+            sample_values: [1500.00, 23500.50]
+          - name: status
+            logical_name: "订单状态"
+            type: VARCHAR(20)
+            description: "订单状态"
+            enum_values:
+              pending: "待支付"
+              paid: "已支付"
+              shipped: "已发货"
+              completed: "已完成"
+              cancelled: "已取消"
+          - name: payment_method
+            logical_name: "支付方式"
+            type: VARCHAR(20)
+            enum_values:
+              alipay: "支付宝"
+              wechat: "微信支付"
+              bank_card: "银行卡"
+              cash: "现金"
+          - name: created_at
+            logical_name: "创建时间"
+            type: TIMESTAMP
+            description: "记录创建时间"
+          - name: updated_at
+            logical_name: "更新时间"
+            type: TIMESTAMP
+            description: "最后更新时间"
+
+      # ── 客户表 ────────────────────────────────────────────────
+      - name: customers
+        logical_name: "客户表"
+        description: "客户信息主表"
+        primary_key: id
+        columns:
+          - name: id
+            logical_name: "客户ID"
+            type: INTEGER
+            is_primary_key: true
+          - name: name
+            logical_name: "客户名称"
+            type: VARCHAR(100)
+            description: "客户全称"
+          - name: phone
+            logical_name: "联系电话"
+            type: VARCHAR(20)
+            description: "联系电话"
+            # 敏感字段，会被脱敏
+          - name: email
+            logical_name: "邮箱"
+            type: VARCHAR(100)
+            description: "电子邮箱"
+          - name: level
+            logical_name: "客户等级"
+            type: VARCHAR(10)
+            enum_values:
+              VIP: "VIP客户"
+              gold: "金卡客户"
+              silver: "银卡客户"
+              normal: "普通客户"
+          - name: region
+            logical_name: "所属区域"
+            type: VARCHAR(50)
+            enum_values:
+              east: "华东"
+              south: "华南"
+              north: "华北"
+              central: "华中"
+          - name: registered_at
+            logical_name: "注册日期"
+            type: DATE
+            description: "客户注册日期"
+
+      # ── 产品表 ────────────────────────────────────────────────
+      - name: products
+        logical_name: "产品表"
+        description: "产品目录表"
+        primary_key: id
+        columns:
+          - name: id
+            logical_name: "产品ID"
+            type: INTEGER
+            is_primary_key: true
+          - name: name
+            logical_name: "产品名称"
+            type: VARCHAR(200)
+            description: "产品名称"
+          - name: category
+            logical_name: "产品类别"
+            type: VARCHAR(50)
+            description: "产品分类"
+            enum_values:
+              electronics: "电子产品"
+              furniture: "家具"
+              clothing: "服装"
+              food: "食品"
+          - name: price
+            logical_name: "单价"
+            type: DECIMAL(10,2)
+            description: "产品单价"
+          - name: stock
+            logical_name: "库存数量"
+            type: INTEGER
+            description: "当前库存"
+          - name: supplier_id
+            logical_name: "供应商ID"
+            type: INTEGER
+            description: "关联供应商表"
+
+      # ── 部门报销表 ────────────────────────────────────────────
+      - name: dept_expense
+        logical_name: "部门报销表"
+        description: "各部门日常费用报销记录"
+        primary_key: id
+        columns:
+          - name: id
+            logical_name: "报销单ID"
+            type: INTEGER
+            is_primary_key: true
+          - name: dept_name
+            logical_name: "部门名称"
+            type: VARCHAR(100)
+            description: "部门名称"
+            enum_values:
+              sales: "销售部"
+              hr: "人力资源部"
+              finance: "财务部"
+              tech: "技术部"
+              ops: "运营部"
+          - name: employee_id
+            logical_name: "员工ID"
+            type: INTEGER
+            description: "报销人员工号"
+          - name: employee_name
+            logical_name: "员工姓名"
+            type: VARCHAR(50)
+            description: "报销人姓名"
+          - name: category
+            logical_name: "报销类别"
+            type: VARCHAR(50)
+            enum_values:
+              travel: "差旅费"
+              meals: "餐饮费"
+              office: "办公费"
+              communication: "通讯费"
+              entertainment: "招待费"
+          - name: amount
+            logical_name: "报销金额"
+            type: DECIMAL(12,2)
+            description: "报销金额"
+          - name: submit_date
+            logical_name: "提交日期"
+            type: DATE
+            description: "报销单提交日期"
+          - name: approval_status
+            logical_name: "审批状态"
+            type: VARCHAR(20)
+            enum_values:
+              pending: "待审批"
+              approved: "已审批"
+              rejected: "已驳回"
+
+      # ── 销售汇总表 ───────────────────────────────────────────
+      - name: sales_summary
+        logical_name: "销售汇总表"
+        description: "按时间/产品维度的销售数据汇总"
+        primary_key: id
+        columns:
+          - name: id
+            logical_name: "汇总ID"
+            type: INTEGER
+            is_primary_key: true
+          - name: period
+            logical_name: "统计周期"
+            type: VARCHAR(10)
+            description: "统计周期，格式如 2024-05"
+          - name: product_id
+            logical_name: "产品ID"
+            type: INTEGER
+          - name: product_name
+            logical_name: "产品名称"
+            type: VARCHAR(200)
+          - name: category
+            logical_name: "产品类别"
+            type: VARCHAR(50)
+          - name: sales_amount
+            logical_name: "销售额"
+            type: DECIMAL(15,2)
+            description: "总销售额"
+          - name: sales_quantity
+            logical_name: "销售数量"
+            type: INTEGER
+            description: "总销售数量"
+          - name: order_count
+            logical_name: "订单数量"
+            type: INTEGER
+            description: "订单笔数"
+
+      # ── 用户表（系统）─────────────────────────────────────────
+      - name: users
+        logical_name: "系统用户表"
+        description: "系统用户账号信息"
+        primary_key: id
+        columns:
+          - name: id
+            logical_name: "用户ID"
+            type: INTEGER
+            is_primary_key: true
+          - name: username
+            logical_name: "用户名"
+            type: VARCHAR(50)
+            description: "登录用户名"
+          - name: password_hash
+            logical_name: "密码哈希"
+            type: VARCHAR(255)
+            description: "密码哈希值"
+            is_nullable: false
+          - name: full_name
+            logical_name: "姓名"
+            type: VARCHAR(100)
+          - name: email
+            logical_name: "邮箱"
+            type: VARCHAR(100)
+          - name: role
+            logical_name: "角色"
+            type: VARCHAR(20)
+            enum_values:
+              admin: "管理员"
+              user: "普通用户"
+              readonly: "只读用户"
+          - name: is_active
+            logical_name: "是否激活"
+            type: BOOLEAN
+          - name: last_login_at
+            logical_name: "最后登录时间"
+            type: TIMESTAMP
+
+# ── 表关系定义 ───────────────────────────────────────────────────
+relationships:
+  - from: orders
+    to: customers
+    from_column: customer_id
+    to_column: id
+    description: "订单关联客户"
+
+# ── 行级访问控制 ────────────────────────────────────────────────
+row_level_access:
+  - role: admin
+    description: "管理员可访问全部数据"
+    condition: "TRUE"
+  - role: user
+    description: "普通用户访问自己的数据"
+    # 实际条件由 SQL 注入器根据用户上下文动态生成
+    condition: "TRUE"
+  - role: readonly
+    description: "只读用户只能查询"
+    condition: "TRUE"
+
+# ── 业务关键词映射 ──────────────────────────────────────────────
+# 用于增强 TF-IDF 检索的关键词
+business_keywords:
+  orders: ["订单", "销售", "订单量"]
+  customers: ["客户", "顾客", "买家"]
+  products: ["产品", "商品", "货物"]
+  dept_expense: ["报销", "费用", "支出"]
+  sales_summary: ["销售", "业绩", "营收"]
+  total_amount: ["金额", "总额", "销售额", "总价"]
+  order_date: ["日期", "时间", "下单"]
+  status: ["状态", "情况"]
+  customer_name: ["客户", "买家", "顾客"]
+  amount: ["金额", "钱", "数额"]

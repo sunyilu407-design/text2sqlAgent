@@ -1,0 +1,110 @@
+# =============================================================================
+# Micro-GenBI Docker Compose 配置
+# =============================================================================
+
+services:
+  # Micro-GenBI API 服务
+  api:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    container_name: microgenbi-api
+    ports:
+      - "8000:8000"
+    environment:
+      # 应用配置
+      - APP_ENV=production
+      - DEBUG=false
+      - LOG_LEVEL=INFO
+
+      # 数据库配置
+      - DB_TYPE=postgresql
+      - DB_HOST=postgres
+      - DB_PORT=5432
+      - DB_NAME=microgenbi
+      - DB_USER=microgenbi
+      - DB_PASSWORD=microgenbi_secret
+
+      # LLM 配置
+      - LLM_PROVIDER=deepseek
+      - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY:-}
+
+      # Schema 配置
+      - SCHEMA_PATH=/app/schema.yaml
+
+    volumes:
+      # 挂载本地 Schema 文件
+      - ../schema.yaml:/app/schema.yaml:ro
+      # 挂载数据目录
+      - data:/app/data
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    restart: unless-stopped
+
+  # PostgreSQL 数据库
+  postgres:
+    image: postgres:15-alpine
+    container_name: microgenbi-postgres
+    environment:
+      - POSTGRES_DB=microgenbi
+      - POSTGRES_USER=microgenbi
+      - POSTGRES_PASSWORD=microgenbi_secret
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U microgenbi"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # 可选：Redis 缓存
+  redis:
+    image: redis:7-alpine
+    container_name: microgenbi-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    restart: unless-stopped
+    profiles:
+      - with-redis
+
+  # 可选：Streamlit UI
+  ui:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    container_name: microgenbi-ui
+    command: streamlit run src/micro_genbi/ui/streamlit_app.py --server.port 8501 --server.address 0.0.0.0
+    ports:
+      - "8501:8501"
+    environment:
+      - API_BASE_URL=http://api:8000
+    depends_on:
+      - api
+    restart: unless-stopped
+    profiles:
+      - with-ui
+
+volumes:
+  postgres_data:
+  redis_data:
+  data:
+
+networks:
+  default:
+    name: microgenbi-network
