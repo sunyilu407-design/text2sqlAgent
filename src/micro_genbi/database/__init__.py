@@ -23,6 +23,8 @@ from micro_genbi.database.services import (
     APIKeyService,
     AuditService,
     QueryHistoryService,
+    UserManagementService,
+    AuditLogService,
     CreateTenantInput,
     CreateUserInput,
     CreateLLMConfigInput,

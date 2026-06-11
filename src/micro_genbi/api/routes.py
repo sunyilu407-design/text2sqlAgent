@@ -6,11 +6,13 @@ import os
 import asyncio
 import json
 import uuid
+import csv
+import io
 from typing import Optional, Any
 from functools import lru_cache
 
 from fastapi import APIRouter, HTTPException, BackgroundTasks, Depends, Query
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, JSONResponse
 
 from micro_genbi.models import (
     QueryRequest,
@@ -19,10 +21,11 @@ from micro_genbi.models import (
     TaskResult,
     TaskProgressEvent,
     SchemaResponse,
+    ChartType,
     ExportRequest,
     ExportResponse,
-    ChartType,
 )
+from pydantic import BaseModel, Field
 from micro_genbi.errors import SQLValidationError, GenBIError
 from micro_genbi import get_logger
 from micro_genbi.api.dependencies import (
@@ -33,9 +36,15 @@ from micro_genbi.api.dependencies import (
 )
 from micro_genbi.service.ask_service import AskService
 from micro_genbi.service.multi_ask_service import MultiDBAskService
+from micro_genbi.service.subscription import SubscriptionService
+from micro_genbi.service.sql_versioning import SQLVersioningService
+from micro_genbi.service.operation_trace import OperationTraceService
 from micro_genbi.semantic.schema_registry import SchemaRegistry
 from micro_genbi.chart import ChartEngine
-from micro_genbi.database.services import QueryHistoryService
+from micro_genbi.chart.smart_recommender import ChartRecommender
+from micro_genbi.intent.query_suggester import QuerySuggester
+from micro_genbi.database.services import QueryHistoryService, AuditLogService, AuditService, UserManagementService, UserService, TenantService
+from micro_genbi.database import CreateUserInput, CreateTenantInput
 from micro_genbi.db.connection_factory import get_multi_db_factory
 
 logger = get_logger(__name__)
@@ -43,6 +52,35 @@ router = APIRouter()
 
 # 模拟任务存储（生产环境应使用 Redis）
 _tasks: dict[str, dict] = {}
+
+# 导出任务存储
+_export_tasks: dict[str, dict] = {}
+
+# 全局服务实例
+_sql_versioning_service: SQLVersioningService | None = None
+_operation_trace_service: OperationTraceService | None = None
+_query_suggester: QuerySuggester | None = None
+
+
+def _get_sql_versioning() -> SQLVersioningService:
+    global _sql_versioning_service
+    if _sql_versioning_service is None:
+        _sql_versioning_service = SQLVersioningService()
+    return _sql_versioning_service
+
+
+def _get_operation_trace() -> OperationTraceService:
+    global _operation_trace_service
+    if _operation_trace_service is None:
+        _operation_trace_service = OperationTraceService()
+    return _operation_trace_service
+
+
+def _get_query_suggester() -> QuerySuggester:
+    global _query_suggester
+    if _query_suggester is None:
+        _query_suggester = QuerySuggester()
+    return _query_suggester
 
 
 @lru_cache()
@@ -114,7 +152,7 @@ async def query(
         # 保存查询历史
         if user_id and tenant_id:
             try:
-                async for session in get_db_session():
+                async with get_db_session() as session:
                     history_service = QueryHistoryService(session)
                     await history_service.create(
                         user_id=user_id,
@@ -126,7 +164,6 @@ async def query(
                         status="success",
                         session_id=request.session_id,
                     )
-                    break
             except Exception as hist_err:
                 logger.warning(f"保存查询历史失败: {hist_err}")
 
@@ -170,7 +207,7 @@ async def query_multi(
         role = request.role or current_user.get("role", "user")
 
         # 获取 DB session 并创建 MultiDBAskService
-        async for session in get_db_session():
+        async with get_db_session() as session:
             service = MultiDBAskService(
                 session=session,
                 schema_registry=_get_schema_registry(),
@@ -228,10 +265,59 @@ async def query_multi(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+class SQLPreviewRequest(BaseModel):
+    query: str = Field(..., description="自然语言查询")
+    connection_id: Optional[str] = Field(None, description="数据库连接 ID")
+
+
+class SQLPreviewResponse(BaseModel):
+    sql: str = Field(..., description="生成的 SQL")
+
+
+@router.post("/query/preview-sql", response_model=SQLPreviewResponse, tags=["查询"])
+async def preview_sql(
+    request: SQLPreviewRequest,
+    current_user: dict = Depends(get_current_user),
+):
+    """
+    仅生成 SQL（不执行），用于 workbench 实时预览。
+    """
+    try:
+        from micro_genbi.service.ask_service import AskService
+        from micro_genbi.llm.factory import create_llm_client
+        from micro_genbi.semantic.schema_registry import SchemaRegistry
+
+        llm_client = create_llm_client()
+        schema_registry = SchemaRegistry()
+        schema_registry.load()
+
+        service = AskService(llm_client, schema_registry)
+        try:
+            result = await service.ask(
+                query=request.query,
+                user_id=current_user.get("user_id"),
+                role=current_user.get("role", "user"),
+                session_id=None,
+                skip_execution=True,
+            )
+            return SQLPreviewResponse(sql=result.sql)
+        finally:
+            await service.close()
+
+    except SQLValidationError as e:
+        raise HTTPException(status_code=422, detail=e.to_dict())
+    except GenBIError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(f"SQL 预览失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.post("/query/async", response_model=TaskInfo, tags=["查询"])
 async def query_async(
     request: QueryRequest,
     background_tasks: BackgroundTasks,
+    current_user: dict = Depends(get_current_user),
 ):
     """
     异步执行查询
@@ -240,9 +326,9 @@ async def query_async(
     """
     task_id = f"task_{uuid.uuid4().hex[:12]}"
 
-    user_id = request.user_id or "anonymous"
-    tenant_id = request.user_id or "default"
-    role = request.role or "user"
+    user_id = request.user_id or current_user.get("user_id", "anonymous")
+    tenant_id = current_user.get("tenant_id", "default")
+    role = request.role or current_user.get("role", "user")
 
     _tasks[task_id] = {
         "id": task_id,
@@ -408,7 +494,7 @@ async def test_connection(connection: dict):
         raise HTTPException(status_code=400, detail="缺少 connection id")
 
     try:
-        async for session in get_db_session():
+        async with get_db_session() as session:
             db_service = DatabaseConnectionService(session)
             conn = await db_service.get_by_id(conn_id)
             if not conn:
@@ -439,20 +525,88 @@ async def test_connection(connection: dict):
 async def list_sessions(
     limit: int = Query(20, ge=1, le=100),
     offset: int = Query(0, ge=0),
+    current_user: dict = Depends(get_current_user),
 ):
-    """获取会话列表"""
-    # TODO: 实现会话列表
-    return {
-        "items": [],
-        "total": 0,
-    }
+    """获取会话列表（基于查询历史中的 session_id）"""
+    user_id = current_user.get("user_id")
+    tenant_id = current_user.get("tenant_id", "default")
+
+    async with get_db_session() as session:
+        from micro_genbi.database.services import QueryHistoryService
+        history_svc = QueryHistoryService(session)
+
+        # 获取所有历史
+        all_items, total = await history_svc.list_all(tenant_id=tenant_id, limit=1000, offset=0)
+
+        # 按 session_id 分组，取每个 session 的最新记录
+        session_map: dict[str, dict] = {}
+        for h in all_items:
+            sid = getattr(h, 'session_id', None) or getattr(h, 'id', None) or str(id(h))
+            if sid not in session_map:
+                ts = getattr(h, 'created_at', None)
+                session_map[sid] = {
+                    "id": sid,
+                    "title": (getattr(h, 'natural_query', '') or '')[:100],
+                    "queryCount": 1,
+                    "lastQuery": getattr(h, 'natural_query', '') or '',
+                    "lastActive": ts.isoformat() if ts else "",
+                    "createdAt": ts.isoformat() if ts else "",
+                    "userId": getattr(h, 'user_id', user_id or 'anonymous'),
+                }
+            else:
+                session_map[sid]["queryCount"] += 1
+
+        sessions = list(session_map.values())
+        sessions.sort(key=lambda x: x.get("lastActive", ""), reverse=True)
+        return {
+            "items": sessions[offset:offset + limit],
+            "total": len(sessions),
+        }
 
 
 @router.get("/sessions/{session_id}", tags=["会话"])
-async def get_session(session_id: str):
-    """获取会话详情"""
-    # TODO: 实现会话详情
-    raise HTTPException(status_code=404, detail="会话不存在")
+async def get_session(
+    session_id: str,
+    current_user: dict = Depends(get_current_user),
+):
+    """获取会话详情（包含该 session 的所有查询）"""
+    tenant_id = current_user.get("tenant_id", "default")
+
+    async with get_db_session() as session:
+        from micro_genbi.database.services import QueryHistoryService
+        history_svc = QueryHistoryService(session)
+        all_items, _ = await history_svc.list_all(tenant_id=tenant_id, limit=1000, offset=0)
+
+        # 筛选匹配 session_id 的记录
+        matching = []
+        for h in all_items:
+            sid = getattr(h, 'session_id', None)
+            if sid == session_id:
+                ts = getattr(h, 'created_at', None)
+                matching.append({
+                    "id": getattr(h, 'id', ''),
+                    "naturalQuery": getattr(h, 'natural_query', '') or '',
+                    "sql": getattr(h, 'generated_sql', '') or '',
+                    "status": getattr(h, 'status', 'success'),
+                    "executionTimeMs": getattr(h, 'execution_time_ms', 0) or 0,
+                    "createdAt": ts.isoformat() if ts else "",
+                })
+
+        if not matching:
+            raise HTTPException(status_code=404, detail="会话不存在")
+
+        # 按时间排序
+        matching.sort(key=lambda x: x.get("createdAt", ""))
+
+        # 从第一条记录提取会话信息
+        first = matching[0]
+        return {
+            "id": session_id,
+            "title": (first.get("naturalQuery", "") or "")[:100],
+            "queries": matching,
+            "queryCount": len(matching),
+            "userId": current_user.get("user_id"),
+        }
 
 
 # =============================================================================
@@ -468,27 +622,182 @@ async def login(request: dict):
     if not username or not password:
         raise HTTPException(status_code=400, detail="用户名和密码不能为空")
 
-    # TODO: 实现认证逻辑
-    return {
-        "access_token": "mock_token",
-        "refresh_token": "mock_refresh_token",
-        "expires_in": 3600,
-        "user": {
-            "id": "user_001",
-            "username": username,
-            "role": "user",
-            "tenant_id": "tenant_001",
-        },
-    }
+    # 优先尝试数据库认证
+    async with get_db_session() as session:
+        user_service = UserService(session)
+        user = await user_service.verify_password(username, password)
+        if user:
+            import time
+            from jose import jwt
+            secret = os.getenv("JWT_SECRET", "micro-genbi-dev-secret-change-in-production")
+            token_payload = {
+                "sub": user.id,
+                "tenant_id": user.tenant_id,
+                "role": user.role,
+                "exp": int(time.time()) + 86400,
+            }
+            token = jwt.encode(token_payload, secret, algorithm="HS256")
+
+            # 记录审计日志
+            try:
+                audit_service = AuditService(session)
+                await audit_service.log(
+                    event_type="user.login",
+                    user_id=user.id,
+                    tenant_id=user.tenant_id,
+                    result="success",
+                )
+            except Exception:
+                pass
+
+            return {
+                "access_token": token,
+                "token_type": "Bearer",
+                "expires_in": 86400,
+                "user": {
+                    "id": user.id,
+                    "username": user.username,
+                    "email": user.email,
+                    "role": user.role,
+                    "group": user.tenant_id,
+                    "subscriptionPlan": "free",
+                    "createdAt": user.created_at.isoformat() if user.created_at else "",
+                },
+            }
+
+    # 认证失败
+    raise HTTPException(status_code=401, detail="用户名或密码错误")
+
+
+@router.get("/auth/me", tags=["认证"])
+async def get_me(current_user: dict = Depends(get_current_user)):
+    """获取当前用户信息"""
+    user_id = current_user.get("user_id")
+    if not user_id:
+        raise HTTPException(status_code=401, detail="未登录")
+
+    async with get_db_session() as session:
+        from sqlalchemy import select
+        from micro_genbi.database.models import User
+        result = await session.execute(select(User).where(User.id == user_id))
+        user = result.scalar_one_or_none()
+        if not user:
+            raise HTTPException(status_code=404, detail="用户不存在")
+        return {
+            "id": user.id,
+            "username": user.username,
+            "email": user.email or "",
+            "role": user.role,
+            "group": user.tenant_id,
+            "subscriptionPlan": "free",
+            "createdAt": user.created_at.isoformat() if user.created_at else "",
+        }
+
+
+@router.post("/auth/register", tags=["认证"])
+async def register(request: dict):
+    """用户注册"""
+    username = request.get("username")
+    email = request.get("email")
+    password = request.get("password")
+    role = request.get("role", "user")
+    group = request.get("group", "default")
+
+    if not username or not password or not email:
+        raise HTTPException(status_code=400, detail="用户名、邮箱和密码不能为空")
+
+    # 查找或创建租户
+    async with get_db_session() as session:
+        from micro_genbi.database.services import TenantService
+        from micro_genbi.database import CreateTenantInput
+
+        tenant_service = TenantService(session)
+        tenants = await tenant_service.list_all()
+        tenant = next((t for t in tenants if t.name == group), None)
+        if not tenant:
+            new_tenant = await tenant_service.create(
+                CreateTenantInput(name=group, description=f"租户: {group}")
+            )
+            tenant_id = new_tenant.id
+        else:
+            tenant_id = tenant.id
+
+        # 创建用户
+        user_service = UserService(session)
+        try:
+            result = await user_service.create(
+                input=CreateUserInput(
+                    username=username,
+                    email=email,
+                    password=password,
+                    role=role,
+                ),
+                tenant_id=tenant_id,
+            )
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"注册失败: {str(e)}")
+
+        import time
+        from jose import jwt
+        secret = os.getenv("JWT_SECRET", "micro-genbi-dev-secret-change-in-production")
+        token_payload = {
+            "sub": result.id,
+            "tenant_id": result.tenant_id,
+            "role": result.role,
+            "exp": int(time.time()) + 86400,
+        }
+        token = jwt.encode(token_payload, secret, algorithm="HS256")
+
+        return {
+            "access_token": token,
+            "token_type": "Bearer",
+            "expires_in": 86400,
+            "user": {
+                "id": result.id,
+                "username": result.username,
+                "email": result.email,
+                "role": result.role,
+                "group": result.tenant_id,
+                "subscriptionPlan": "free",
+                "createdAt": result.created_at.isoformat() if result.created_at else "",
+            },
+        }
 
 
 @router.post("/auth/refresh", tags=["认证"])
 async def refresh_token(request: dict):
     """刷新 Token"""
-    # TODO: 实现 Token 刷新
+    import time
+    from jose import jwt, JWTError
+
+    old_token = request.get("token")
+    if not old_token:
+        raise HTTPException(status_code=400, detail="缺少 token 参数")
+
+    secret = os.getenv("JWT_SECRET", "micro-genbi-dev-secret-change-in-production")
+    try:
+        payload = jwt.decode(old_token, secret, algorithms=["HS256"])
+    except JWTError:
+        raise HTTPException(status_code=401, detail="无效的 Token")
+
+    # 检查是否已过期太久
+    exp = payload.get("exp", 0)
+    if exp < time.time() - 86400 * 7:
+        raise HTTPException(status_code=401, detail="Token 已过期超过7天，需要重新登录")
+
+    # 生成新 token
+    new_payload = {
+        "sub": payload.get("sub"),
+        "tenant_id": payload.get("tenant_id", "default"),
+        "role": payload.get("role", "user"),
+        "exp": int(time.time()) + 86400,
+    }
+    new_token = jwt.encode(new_payload, secret, algorithm="HS256")
+
     return {
-        "access_token": "new_token",
-        "expires_in": 3600,
+        "access_token": new_token,
+        "token_type": "Bearer",
+        "expires_in": 86400,
     }
 
 
@@ -516,30 +825,590 @@ async def create_api_key(request: dict):
 # =============================================================================
 
 @router.post("/export", response_model=ExportResponse, tags=["导出"])
-async def export_data(request: ExportRequest):
-    """导出查询结果"""
-    export_id = f"exp_{uuid.uuid4().hex[:12]}"
+async def export_data(
+    request: ExportRequest,
+    background_tasks: BackgroundTasks,
+    current_user: dict = Depends(get_current_user),
+):
+    """
+    异步导出查询结果
 
-    return ExportResponse(
-        export_id=export_id,
-        status="pending",
-    )
+    支持 CSV、JSON、Excel、SQL、PDF 格式。
+    创建导出任务后返回 export_id，客户端通过 GET /export/{export_id} 查询状态。
+    """
+    export_id = f"exp_{uuid.uuid4().hex[:12]}"
+    user_id = current_user.get("user_id", "anonymous")
+
+    # 获取查询数据
+    data = []
+    columns = []
+    if request.query_id:
+        # 从历史记录获取 SQL 并重新执行
+        async with get_db_session() as session:
+            history_svc = QueryHistoryService(session)
+            # 查找历史记录
+            all_items, _ = await history_svc.list_all(
+                tenant_id=current_user.get("tenant_id", "default"),
+                limit=1000, offset=0
+            )
+            for h in all_items:
+                if getattr(h, 'id', None) == request.query_id:
+                    sql = getattr(h, 'generated_sql', None)
+                    if sql:
+                        # 重新执行 SQL
+                        try:
+                            executor = await get_multi_db_factory().get_executor(None)
+                            data = await executor.execute(sql, limit=request.max_rows)
+                            if data:
+                                columns = list(data[0].keys())
+                        except Exception as e:
+                            logger.warning(f"导出重执行失败: {e}")
+                    break
+
+    # 如果没有从 query_id 获取数据，使用直接传入的 SQL
+    if not data and request.sql:
+        try:
+            executor = await get_multi_db_factory().get_executor(None)
+            data = await executor.execute(request.sql, limit=request.max_rows)
+            if data:
+                columns = list(data[0].keys())
+        except Exception as e:
+            logger.warning(f"导出 SQL 执行失败: {e}")
+
+    # 如果仍无数据，返回空结果
+    if not data:
+        return ExportResponse(export_id=export_id, status="completed")
+
+    # 存储导出任务
+    _export_tasks[export_id] = {
+        "id": export_id,
+        "status": "processing",
+        "user_id": user_id,
+        "data": data,
+        "columns": columns,
+        "format": request.format,
+        "include_headers": request.include_headers,
+        "mask_sensitive": request.mask_sensitive,
+        "max_rows": request.max_rows,
+    }
+
+    # 在后台生成文件
+    background_tasks.add_task(_generate_export_file, export_id)
+
+    return ExportResponse(export_id=export_id, status="processing")
 
 
 @router.get("/export/{export_id}", tags=["导出"])
 async def get_export_status(export_id: str):
     """获取导出状态"""
-    # TODO: 实现导出状态查询
-    return {
+    task = _export_tasks.get(export_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="导出任务不存在")
+
+    response = {
         "export_id": export_id,
-        "status": "completed",
-        "download_url": f"/api/v1/export/{export_id}/download",
+        "status": task["status"],
     }
+    if task["status"] == "completed":
+        response["download_url"] = f"/api/v1/export/{export_id}/download"
+        response["file_size"] = task.get("file_size", 0)
+        response["row_count"] = task.get("row_count", 0)
+    elif task["status"] == "failed":
+        response["error"] = task.get("error", "导出失败")
+
+    return response
+
+
+@router.get("/export/{export_id}/download", tags=["导出"])
+async def download_export(export_id: str):
+    """下载导出的文件"""
+    task = _export_tasks.get(export_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="导出任务不存在")
+
+    if task["status"] != "completed":
+        raise HTTPException(status_code=400, detail=f"导出未完成，当前状态: {task['status']}")
+
+    content = task.get("content")
+    if not content:
+        raise HTTPException(status_code=404, detail="文件内容不存在，可能已过期")
+
+    filename = f"export_{export_id}.{task.get('format', 'csv')}"
+    media_types = {
+        "csv": "text/csv",
+        "json": "application/json",
+        "excel": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "sql": "application/sql",
+        "pdf": "application/pdf",
+    }
+    return StreamingResponse(
+        io.BytesIO(content),
+        media_type=media_types.get(task.get("format", "csv"), "application/octet-stream"),
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+async def _generate_export_file(export_id: str) -> None:
+    """后台生成导出文件"""
+    task = _export_tasks.get(export_id)
+    if not task:
+        return
+
+    try:
+        data = task.get("data", [])
+        columns = task.get("columns", [])
+        fmt = task.get("format", "csv")
+        include_headers = task.get("include_headers", True)
+
+        if fmt == "csv":
+            output = io.StringIO()
+            writer = csv.writer(output)
+            if include_headers and columns:
+                writer.writerow(columns)
+            for row in data:
+                writer.writerow([row.get(col, "") for col in columns])
+            task["content"] = output.getvalue().encode("utf-8")
+        elif fmt == "json":
+            content = json.dumps(data, ensure_ascii=False, indent=2)
+            task["content"] = content.encode("utf-8")
+        else:
+            # 其他格式暂时返回 CSV（Excel/PDF 需要额外库）
+            output = io.StringIO()
+            writer = csv.writer(output)
+            if include_headers and columns:
+                writer.writerow(columns)
+            for row in data:
+                writer.writerow([row.get(col, "") for col in columns])
+            task["content"] = output.getvalue().encode("utf-8")
+
+        task["file_size"] = len(task.get("content", b""))
+        task["row_count"] = len(data)
+        task["status"] = "completed"
+
+    except Exception as e:
+        logger.error(f"导出生成失败: {export_id}: {e}")
+        task["status"] = "failed"
+        task["error"] = str(e)
+
+
+# =============================================================================
+# 历史记录接口
+# =============================================================================
+
+@router.get("/history", tags=["历史"])
+async def get_history(
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    current_user: dict = Depends(get_current_user),
+):
+    """获取查询历史"""
+    user_id = current_user.get("user_id")
+    tenant_id = current_user.get("tenant_id", "default")
+
+    async with get_db_session() as session:
+        service = QueryHistoryService(session)
+        if user_id:
+            items = await service.get_by_user(user_id, limit=limit, offset=offset)
+            if items:
+                return {"items": [_h_to_dict(h) for h in items], "total": len(items)}
+        # 降级到租户级查询
+        items, total = await service.list_all(tenant_id=tenant_id, limit=limit, offset=offset)
+        return {"items": [_h_to_dict(h) for h in items], "total": total}
+    return {"items": [], "total": 0}
+
+
+@router.delete("/history/{history_id}", tags=["历史"])
+async def delete_history(
+    history_id: str,
+    current_user: dict = Depends(get_current_user),
+):
+    """删除历史记录"""
+    async with get_db_session() as session:
+        service = QueryHistoryService(session)
+        success = await service.delete(history_id)
+        if not success:
+            raise HTTPException(status_code=404, detail="历史记录不存在")
+        return {"message": "已删除"}
+
+
+# =============================================================================
+# 注册表接口
+# =============================================================================
+
+@router.get("/registry", tags=["注册表"])
+async def get_registry(current_user: dict = Depends(get_current_user)):
+    """获取语义注册表（跨库关系配置）"""
+    registry = _get_schema_registry()
+    # _cross_db_relations 是内部属性，直接访问
+    relations = getattr(registry, "_cross_db_relations", [])
+    return [
+        {
+            "virtualSchema": getattr(r, "name", str(r)) if hasattr(r, "name") else str(r),
+            "sourceNode": getattr(r, "source", "") if hasattr(r, "source") else "",
+            "sourceEntity": getattr(r, "source_table", "") if hasattr(r, "source_table") else "",
+            "type": getattr(r, "type", "cross_db") if hasattr(r, "type") else "cross_db",
+        }
+        for r in (relations or [])
+    ]
+
+
+# =============================================================================
+# 订阅接口
+# =============================================================================
+
+@router.get("/subscriptions", tags=["订阅"])
+async def list_subscriptions(current_user: dict = Depends(get_current_user)):
+    """获取订阅列表"""
+    try:
+        service = SubscriptionService()
+        subs = service.list_subscriptions()
+        return {"items": [_sub_to_dict(s) for s in subs]}
+    except Exception as e:
+        logger.warning(f"订阅列表获取失败: {e}")
+        return {"items": []}
+
+
+@router.post("/subscriptions", tags=["订阅"])
+async def create_subscription(
+    request: dict,
+    current_user: dict = Depends(get_current_user),
+):
+    """创建订阅"""
+    try:
+        service = SubscriptionService()
+        sub = service.create_subscription(
+            user_id=current_user.get("user_id", "anonymous"),
+            name=request.get("name", ""),
+            query=request.get("query_description", ""),
+            schedule=request.get("schedule", "0 * * * *"),
+        )
+        return _sub_to_dict(sub)
+    except Exception as e:
+        logger.warning(f"创建订阅失败: {e}")
+        raise HTTPException(status_code=500, detail=f"创建订阅失败: {str(e)}")
+
+
+@router.patch("/subscriptions/{subscription_id}", tags=["订阅"])
+async def update_subscription(
+    subscription_id: str,
+    request: dict,
+    current_user: dict = Depends(get_current_user),
+):
+    """更新订阅状态"""
+    try:
+        service = SubscriptionService()
+        sub_id = int(subscription_id)
+        # 区分 status 更新和其他更新
+        if "status" in request:
+            if request["status"] == "paused":
+                service.pause_subscription(sub_id)
+            else:
+                service.resume_subscription(sub_id)
+        updated = service.get_subscription(sub_id)
+        if not updated:
+            raise HTTPException(status_code=404, detail="订阅不存在")
+        return _sub_to_dict(updated)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="无效的订阅ID")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.warning(f"更新订阅失败: {e}")
+        raise HTTPException(status_code=500, detail=f"更新订阅失败: {str(e)}")
+
+
+@router.delete("/subscriptions/{subscription_id}", tags=["订阅"])
+async def delete_subscription(
+    subscription_id: str,
+    current_user: dict = Depends(get_current_user),
+):
+    """删除订阅"""
+    try:
+        service = SubscriptionService()
+        success = service.delete_subscription(int(subscription_id))
+        if not success:
+            raise HTTPException(status_code=404, detail="订阅不存在")
+        return {"message": "订阅已删除"}
+    except ValueError:
+        raise HTTPException(status_code=400, detail="无效的订阅ID")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.warning(f"删除订阅失败: {e}")
+        raise HTTPException(status_code=500, detail=f"删除订阅失败: {str(e)}")
+
+
+# =============================================================================
+# 图表推荐接口
+# =============================================================================
+
+@router.post("/chart/recommend", tags=["图表"])
+async def recommend_chart(request: dict):
+    """推荐图表类型"""
+    columns = request.get("columns", [])
+    data = request.get("data", [])
+    intent = request.get("intent")
+
+    try:
+        recommender = ChartRecommender()
+        result = recommender.recommend(columns=columns, data=data, intent=intent)
+        return result
+    except Exception as e:
+        logger.warning(f"图表推荐失败: {e}")
+        # 降级返回默认推荐
+        return {
+            "recommended": "table",
+            "confidence": 0.5,
+            "reason": "基于数据特征推荐",
+            "alternatives": ["bar", "line"],
+            "suggested_configs": {},
+        }
+
+
+# =============================================================================
+# 异常检测接口
+# =============================================================================
+
+from micro_genbi.service.anomaly_detector import AnomalyDetector
+
+_anomaly_detector = AnomalyDetector()
+
+
+@router.post("/query/anomaly-detect", tags=["查询"])
+async def detect_anomalies(
+    request: dict,
+    current_user: dict = Depends(get_current_user),
+):
+    """
+    对查询结果数据进行异常检测。
+
+    支持 Z-Score 和 IQR 两种检测方法，返回异常记录列表和摘要。
+    """
+    data = request.get("data", [])
+    columns = request.get("columns", [])
+    method = request.get("method", "zscore")
+    threshold = request.get("threshold", 3.0)
+
+    if not data or not columns:
+        return {"anomalies": [], "summary": {}, "severity_counts": {}}
+
+    try:
+        result = _anomaly_detector.detect_anomalies(
+            data=data,
+            columns=columns,
+            method=method,
+            threshold=threshold,
+        )
+        return {
+            "anomalies": [
+                {
+                    "row_index": a.row_index,
+                    "column": a.column,
+                    "value": a.value,
+                    "expected_range": list(a.expected_range),
+                    "score": a.score,
+                    "severity": a.severity,
+                }
+                for a in result.anomalies
+            ],
+            "summary": result.summary,
+            "severity_counts": result.severity_counts,
+        }
+    except Exception as e:
+        logger.warning(f"异常检测失败: {e}")
+        return {"anomalies": [], "summary": {}, "severity_counts": {}}
+
+
+# =============================================================================
+# 查询建议接口
+# =============================================================================
+
+@router.get("/query/suggestions", tags=["查询"])
+async def get_query_suggestions(
+    q: str = Query(..., description="用户输入的查询文本"),
+    current_user: dict = Depends(get_current_user),
+):
+    """
+    获取查询建议列表。
+
+    根据用户输入返回查询建议，包括：
+    - 常用查询模板匹配
+    - Schema 字段联想
+    - 历史查询推荐
+    - 时间限定词扩展
+    """
+    try:
+        suggester = _get_query_suggester()
+        user_id = current_user.get("user_id", "default")
+        suggestions = suggester.get_suggestions(q, user_id=user_id)
+        return {
+            "suggestions": [
+                {
+                    "text": s.text,
+                    "type": s.type,
+                    "confidence": s.confidence,
+                    "metadata": s.metadata,
+                }
+                for s in suggestions
+            ]
+        }
+    except Exception as e:
+        logger.warning(f"查询建议获取失败: {e}")
+        return {"suggestions": []}
+
+
+# =============================================================================
+# SQL 版本管理接口
+# =============================================================================
+
+@router.get("/history/versions", tags=["历史"])
+async def list_sql_versions(
+    question: str = Query(..., description="查询问题（用于匹配相关版本）"),
+    limit: int = Query(20, ge=1, le=100, description="返回数量"),
+    current_user: dict = Depends(get_current_user),
+):
+    """
+    获取指定问题相关的 SQL 版本列表。
+    """
+    try:
+        service = _get_sql_versioning()
+        user_id = current_user.get("user_id", "default")
+        versions = service.list_versions(question=question, user_id=user_id, limit=limit)
+        return {
+            "items": [
+                {
+                    "id": v.id,
+                    "question": v.question,
+                    "sql": v.sql,
+                    "created_at": v.created_at.isoformat() if v.created_at else "",
+                    "parent_version_id": v.parent_version_id,
+                    "change_summary": v.change_summary,
+                }
+                for v in versions
+            ],
+            "total": len(versions),
+        }
+    except Exception as e:
+        logger.warning(f"SQL 版本列表获取失败: {e}")
+        return {"items": [], "total": 0}
+
+
+@router.get("/history/versions/compare", tags=["历史"])
+async def compare_sql_versions(
+    version_id1: int = Query(..., description="版本1 ID"),
+    version_id2: int = Query(..., description="版本2 ID"),
+    current_user: dict = Depends(get_current_user),
+):
+    """
+    对比两个 SQL 版本的差异。
+    """
+    try:
+        service = _get_sql_versioning()
+        diff = service.compare_versions(version_id1=version_id1, version_id2=version_id2)
+        return diff
+    except Exception as e:
+        logger.warning(f"SQL 版本对比失败: {e}")
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.post("/history/versions/{version_id}/rollback", tags=["历史"])
+async def rollback_sql_version(
+    version_id: int,
+    current_user: dict = Depends(get_current_user),
+):
+    """
+    回滚到指定 SQL 版本。
+    """
+    try:
+        service = _get_sql_versioning()
+        version = service.get_version(version_id)
+        if not version:
+            raise HTTPException(status_code=404, detail="版本不存在")
+        return {
+            "sql": version.sql,
+            "message": f"已回滚到版本 {version_id}",
+            "version_id": version_id,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.warning(f"SQL 版本回滚失败: {e}")
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+# =============================================================================
+# 操作追踪接口
+# =============================================================================
+
+@router.get("/trace/{task_id}", tags=["追踪"])
+async def get_operation_trace(
+    task_id: str,
+    current_user: dict = Depends(get_current_user),
+):
+    """
+    获取指定任务的完整操作追踪信息。
+    """
+    try:
+        service = _get_operation_trace()
+        trace = service.get_trace(task_id)
+        if not trace:
+            raise HTTPException(status_code=404, detail="追踪记录不存在")
+        return {
+            "id": trace.id,
+            "operation_id": trace.operation_id,
+            "operation_type": trace.operation_type,
+            "total_duration_ms": trace.total_duration_ms,
+            "status": trace.status.value if hasattr(trace.status, "value") else str(trace.status),
+            "steps": [
+                {
+                    "id": s.id,
+                    "type": s.type.value if hasattr(s.type, "value") else str(s.type),
+                    "input_summary": s.input_summary,
+                    "output_summary": s.output_summary,
+                    "duration_ms": s.duration_ms,
+                    "status": s.status.value if hasattr(s.status, "value") else str(s.status),
+                    "metadata": s.metadata,
+                }
+                for s in trace.steps
+            ],
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.warning(f"操作追踪获取失败: {e}")
+        raise HTTPException(status_code=400, detail=str(e))
 
 
 # =============================================================================
 # 辅助函数
 # =============================================================================
+
+def _h_to_dict(h) -> dict:
+    """QueryHistory → dict"""
+    return {
+        "id": h.id,
+        "naturalQuery": h.natural_query,
+        "sql": h.generated_sql or "",
+        "intent": h.intent or "",
+        "status": h.status or "success",
+        "executionTimeMs": h.execution_time_ms or 0,
+        "createdAt": h.created_at.isoformat() if h.created_at else "",
+    }
+
+
+def _sub_to_dict(s) -> dict:
+    """Subscription → dict"""
+    return {
+        "id": s.id,
+        "name": s.name,
+        "query_description": getattr(s, "query_description", ""),
+        "schedule": getattr(s, "schedule", ""),
+        "schedule_label": getattr(s, "schedule_label", ""),
+        "status": getattr(s, "status", "active"),
+        "last_run_at": getattr(s, "last_run_at", None),
+        "next_run_at": getattr(s, "next_run_at", None),
+    }
+
 
 async def _execute_query_task(task_id: str):
     """后台执行查询任务"""

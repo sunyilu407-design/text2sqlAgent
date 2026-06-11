@@ -1,8 +1,13 @@
 # Micro-GenBI 开发计划
 
-|> **文档版本**：v5.0
-|> **日期**：2026-05-27
+|> **文档版本**：v5.1
+|> **日期**：2026-05-28
 |> **状态**：✅ 开发完成（Phase E1-E4 全部完成）
+|>
+| **注意**：以下功能在 `DEPLOYMENT.md` 中有独立文档说明：
+| - `Micro-GenBI-Cache-Strategy.md` — 三级缓存策略（SQL/LLM/Schema）
+| - `Micro-GenBI-LLM-Cost-Tracker.md` — LLM 成本追踪
+| - `Micro-GenBI-Prompt-Engineering.md` — Prompt 模板系统
 |> **已完成模块**：
 > - ✅ Phase A1: 核心基础设施（错误处理、模型、安全、LLM、语义层）
 > - ✅ Phase A2: 核心 Pipeline（意图分类、语义检索、SQL生成、自愈重试）
@@ -44,10 +49,15 @@
 > - 🔄 Phase D4: 定时订阅、仪表盘
 >
 > **待完成模块（Phase E — 增值能力）**：
-> - 🔄 Phase E1: 预测服务（Statistics + Prophet + 异常检测）
-> - 🔄 Phase E2: AI 增强分析（LLMAnalysisService + AnalyticsPipeline）
-> - 🔄 Phase E3: LanceDB Memory（历史 + 语义记忆）
-> - 🔄 Phase E4: 大数据能力（ClickHouse / PostgreSQL FDW，按需实施）
+> - ✅ Phase E1: 预测服务（Statistics + Prophet + 异常检测）
+> - ✅ Phase E2: AI 增强分析（LLMAnalysisService + AnalyticsPipeline）
+> - ✅ Phase E3: LanceDB Memory（历史 + 语义记忆）
+> - ✅ Phase E4: 大数据能力（ClickHouse / PostgreSQL FDW，按需实施）
+
+> **技术文档（补充）**：
+> - `docs/Micro-GenBI-Cache-Strategy.md` — 三级缓存策略
+> - `docs/Micro-GenBI-LLM-Cost-Tracker.md` — LLM 成本追踪
+> - `docs/Micro-GenBI-Prompt-Engineering.md` — Prompt 模板系统
 
 > **依赖文档**：
 > - `Micro-GenBI-Integration.md` — 核心架构、API 设计、代码实现
@@ -87,16 +97,19 @@ Micro-GenBI 是一个企业级 **Text2SQL 垂直领域智能体**，最终交付
 
 | 组件 | 选型 | 说明 |
 |------|------|------|
-| 编程语言 | Python 3.11+ | 主开发语言 |
-| Web 框架 | FastAPI | REST API + MCP Server |
-| 数据库 ORM | SQLAlchemy 2.x | 多数据库支持 |
-| SQL 解析 | sqlglot | AST 遍历，写操作拦截 |
-| LLM | DeepSeek / OpenAI / Ollama | 多后端抽象 |
-| 前端 | Streamlit | 开发/演示用 |
-| 向量存储 | LanceDB | 历史查询 + 语义上下文 |
-| 预测模型 | Prophet + statsmodels | 时序预测 |
-| 容器化 | Docker + docker-compose | 一键部署 |
-| MCP 协议 | python-mcp SDK | AI Agent 集成 |
+| 技术类别 | 技术选型 | 状态 | 说明 |
+|---------|---------|------|------|
+| 编程语言 | Python 3.11+ | ✅ | 主开发语言 |
+| Web 框架 | FastAPI | ✅ | REST API + MCP Server |
+| 数据库 ORM | SQLAlchemy 2.x | ✅ | 多数据库支持 |
+| SQL 解析 | sqlglot | ✅ | AST 遍历，写操作拦截 |
+| LLM | DeepSeek / OpenAI / Ollama | ✅ | 多后端抽象 |
+| 前端 | React + TypeScript + Vite | ✅ | 新版 `micro-genbi-main-UI/` |
+| 向量存储 | LanceDB | ✅ | 历史查询 + 语义上下文 |
+| 预测模型 | Prophet + statsmodels | ✅ | 时序预测（按需安装） |
+| 缓存 | TTLCache + Redis（可选） | ✅ | 三级缓存策略 |
+| 容器化 | Docker + docker-compose | ✅ | 见 `DEPLOYMENT.md` |
+| MCP 协议 | python-mcp SDK | ✅ | AI Agent 集成 |
 
 ### 1.3 源码参考来源
 
@@ -303,6 +316,7 @@ Step A2-4: AskHistoryManager（多轮对话）🔄 待实现
 ├── 实现 build_context()（Token Budget 控制的历史注入）
 ├── 实现 rewrite_followup()（follow-up 重写为完整查询）
 └── 参考：Micro-GenBI-Integration.md 第三章 G4
+    └── 注：多轮对话会话管理已有 `/sessions` API 路由框架（`routes.py`），需接入会话存储后端
 
 Step A2-5: ChartEngine（ECharts 生成）✅ 已完成
 ├── 实现规则推断（数据类型 → 图表类型）
@@ -366,12 +380,12 @@ src/micro_genbi/
 **开发步骤**：
 
 ```
-Step A3-1: TaskTracker（异步任务追踪）🔄 待实现
+Step A3-1: TaskTracker（异步任务追踪）✅ 已完成
 ├── 实现 Task / TaskResult 数据模型
 ├── 实现状态机（PENDING → RUNNING → SUCCESS/FAILED/CANCELLED/TIMEOUT）
 ├── 实现内存存储（生产环境可切换 Redis）
 ├── 实现 SSE 推送（progress 更新）
-└── 参考：Micro-GenBI-Integration.md 第三章 G5
+└── 参考：`routes.py` 中 `/query/async` 路由实现
 
 Step A3-2: REST API 完整路由✅ 已完成
 ├── POST /api/v1/query（同步查询）
@@ -405,11 +419,12 @@ Step A3-4: MCP Server（JSON-RPC 2.0）✅ 已完成
 ├── 工具定义：execute_data_analysis / get_database_schema / get_query_history / cancel_task
 └── 参考：Micro-GenBI-Integration.md 4.4 + WrenAI Port Guide 第六章
 
-Step A3-5: Docker 部署🔄 待实现
+Step A3-5: Docker 部署✅ 已完成
 ├── 创建 Dockerfile（Python 3.11 slim）
 ├── 创建 docker-compose.yaml（FastAPI + Redis 可选）
 ├── 创建 .dockerignore
 └── 配置 uvicorn 多 worker
+    └── 参考：`docker/Dockerfile` 和 `docker/docker-compose.yaml`
 
 Step A3-6: 测试与质量保证🔄 部分实现
 ├── 配置 pytest.ini + conftest.py（夹具：sample_schema.yaml, mock_llm_response）
@@ -643,14 +658,14 @@ src/micro_genbi/
 > **覆盖范围**：大数据 + 预测 + AI 增强分析  
 > **主要参考**：`Multi-Database-Architecture.md` 第七章、第十一章
 
-### Phase C1：大数据能力 🔄 待开发
+### Phase C1：大数据能力 ✅ 已完成
 
 **目标**：支持 ClickHouse / PostgreSQL FDW / Python 并行三条大数据路径
 
 **前置条件**：Phase B3 完成
 
 ```
-Step C1-1: ClickHouse Connector（超大规模路径）🔄 待实现
+Step C1-1: ClickHouse Connector（超大规模路径）✅ 已完成
 ├── 实现 ClickHouseConnector
 │   ├── cluster_query()（集群聚合查询）
 │   ├── get_materialized_view()（预聚合视图）
@@ -658,76 +673,78 @@ Step C1-1: ClickHouse Connector（超大规模路径）🔄 待实现
 ├── CDC 同步方案（可选）
 │   ├── Debezium CDC → Kafka → ClickHouse
 │   └── 简化版：定时ETL（Python cronjob）
-└── 参考：Multi-Database-Architecture.md 7.1 路径一
+└── 参考：`src/micro_genbi/connectors/clickhouse_connector.py`
 
-Step C1-2: PostgreSQL FDW Connector（中等规模路径）🔄 待实现
+Step C1-2: PostgreSQL FDW Connector（中等规模路径）✅ 已完成
 ├── 配置 FDW 连接（mysql_fdw / postgres_fdw）
 ├── 自动生成 CREATE FOREIGN TABLE 语句
 ├── 创建 union_view（逻辑统一视图）
-└── 参考：Multi-Database-Architecture.md 7.1 路径二
+└── 参考：`src/micro_genbi/connectors/fdw_connector.py`
 
-Step C1-3: 大数据路由选择🔄 待实现
+Step C1-3: 大数据路由选择✅ 已完成
 ├── 自动根据库数量和数据量选择路径
 ├── Python 并行（< 10 库，默认路径）
 ├── FDW（10~50 库）
 └── ClickHouse（> 50 库或亿级数据）
+    └── 参考：`src/micro_genbi/connectors/bigdata_router.py`
 ```
 
 ---
 
-### Phase C2：预测服务 🔄 待开发
+### Phase C2：预测服务 ✅ 已完成
 
 **目标**：时序预测 + 异常检测
 
 **前置条件**：Phase B3 完成（数据聚合已可用）
 
 ```
-Step C2-1: TimeSeriesPredictor 抽象🔄 待实现
+Step C2-1: TimeSeriesPredictor 抽象✅ 已完成
 ├── 定义 forecast() 接口
-└── 参考：Multi-Database-Architecture.md 7.2.2
+└── 参考：`src/micro_genbi/prediction/__init__.py`
 
-Step C2-2: StatisticsPredictor（轻量，无需额外依赖）🔄 待实现
+Step C2-2: StatisticsPredictor（轻量，无需额外依赖）✅ 已完成
 ├── 同比增长率计算
 ├── 指数平滑预测
 ├── 置信区间估算（±15%）
-└── 参考：Multi-Database-Architecture.md 7.2.2
+└── 参考：`src/micro_genbi/prediction/statistics_predictor.py`
 
-Step C2-3: ProphetPredictor（精确预测）🔄 待实现
+Step C2-3: ProphetPredictor（精确预测）✅ 已完成
 ├── Prophet 安装 + 配置
 ├── 实现 forecast()（seasonality + trend + holidays）
 ├── MAPE / RMSE / R² 评估
 ├── 自然语言解读生成
-└── 参考：Multi-Database-Architecture.md 7.2.2
+└── 参考：`src/micro_genbi/prediction/prophet_predictor.py`
 
-Step C2-4: PredictionService（统一入口）🔄 待实现
+Step C2-4: PredictionService（统一入口）✅ 已完成
 ├── auto 模式（数据量 > 100 → Prophet，否则 Statistics）
 ├── 模型缓存（避免重复训练）
 ├── 结果缓存（TTL 3600s）
-└── 参考：Multi-Database-Architecture.md 7.2.2
+└── 参考：`src/micro_genbi/prediction/prediction_service.py`
 
-Step C2-5: 异常检测（IsolationForest）🔄 待实现
+Step C2-5: 异常检测（IsolationForest）✅ 已完成
 ├── sklearn IsolationForest 集成
 ├── 自动识别异常数据点
 ├── 生成异常报告
-└── 参考：Multi-Database-Architecture.md 7.2.1
+└── 参考：`src/micro_genbi/service/anomaly_detector.py`
 
-Step C2-6: 预测图表渲染🔄 待实现
+Step C2-6: 预测图表渲染✅ 已完成
 ├── ECharts 折线图（历史 + 预测值）
 ├── 置信区间填充区域
 ├── 异常点标注
 └── ChartEngine 扩展预测模式
+    └── 注：异常检测结果通过 `service/anomaly_detector.py` 生成，预测图表通过 `chart/smart_recommender.py` 渲染
 ```
 
 ---
 
-### Phase C3：AI 增强分析 🔄 待开发
+### Phase C3：AI 增强分析 ✅ 已完成
 
 **目标**：LLM 驱动的深度分析（异常推理、对比分析、自然语言解读）
 
 **前置条件**：Phase B3 + Phase C2 完成
 
 ```
-Step C3-1: LLMAnalysisService🔄 待实现
+Step C3-1: LLMAnalysisService✅ 已完成
 ├── 实现 5 种分析类型：
 │   ├── interpret（结果解读）
 │   ├── compare（对比分析）
@@ -736,29 +753,29 @@ Step C3-1: LLMAnalysisService🔄 待实现
 │   └── sql_explain（SQL 解读）
 ├── 实现 _summarize_result()（结果压缩，避免 token 爆炸）
 ├── 实现 _build_prompt()（分类型生成分析 Prompt）
-└── 参考：Multi-Database-Architecture.md 11.2
+└── 参考：`src/micro_genbi/service/llm_analysis.py`
 
-Step C3-2: AnalyticsPipeline（完整分析流水线）🔄 待实现
+Step C3-2: AnalyticsPipeline（完整分析流水线）✅ 已完成
 ├── Step 1: 执行查询（MultiDBAskService）
 ├── Step 2: 并行 LLM 分析（interpret + compare）
 ├── Step 3: 预测（如需要）
 ├── Step 4: 生成可视化
 ├── Step 5: 组装最终响应
-└── 参考：Multi-Database-Architecture.md 11.3
+└── 参考：`src/micro_genbi/service/analytics_pipeline.py`
 
-Step C3-3: LanceDB Memory（历史 + 语义记忆）🔄 待实现
+Step C3-3: LanceDB Memory（历史 + 语义记忆）✅ 已完成
 ├── 实现 LanceDBMemoryStore
 │   ├── context_table（表/列语义向量）
 │   └── queries_table（NL→SQL 历史向量）
 ├── 实现 MemoryProvider（Lazy open + 缓存）
 ├── 实现 MemoryAPI（fetch/recall/store）
 ├── 实现 MemoryTools（Pydantic AI 工具）
-└── 参考：Micro-GenBI-WrenAI-Port-Guide.md 第七章 + 第九章
+└── 参考：`src/micro_genbi/memory/lancedb_store.py` + `memory_api.py` + `memory_tools.py`
 ```
 
 ---
 
-## 六、主线 D — 核心补全与功能增强 🔄 进行中
+## 六、主线 D — 核心补全与功能增强 ✅ 已完成
 
 > **覆盖范围**：补全缺失模块（TF-IDF、图表生成）+ 功能增强（缓存、建议、导出、历史）
 > **主要参考**：`Micro-GenBI-Feature-Enhancement.md`

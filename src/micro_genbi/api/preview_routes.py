@@ -24,7 +24,7 @@ from micro_genbi.api.preview import (
 )
 
 logger = get_logger(__name__)
-router = APIRouter(prefix="/api/v1", tags=["预览"])
+router = APIRouter(prefix="/preview", tags=["预览"])
 
 
 # =============================================================================

@@ -353,6 +353,10 @@ class TestExcelExport:
 
     def test_export_excel_with_openpyxl(self, exporter, sample_data, sample_columns, temp_dir):
         """测试有 openpyxl 时的 Excel 导出"""
+        try:
+            import openpyxl  # noqa: F401
+        except ImportError:
+            pytest.skip("openpyxl not installed")
         req = ExportRequest(
             data=sample_data,
             columns=sample_columns,
@@ -371,6 +375,10 @@ class TestPDFExport:
 
     def test_export_pdf_with_reportlab(self, exporter, sample_data, sample_columns, temp_dir):
         """测试有 reportlab 时的 PDF 导出"""
+        try:
+            import reportlab  # noqa: F401
+        except ImportError:
+            pytest.skip("reportlab not installed")
         req = ExportRequest(
             data=sample_data,
             columns=sample_columns,

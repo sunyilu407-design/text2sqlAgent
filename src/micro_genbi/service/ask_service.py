@@ -127,6 +127,7 @@ class AskService:
         role: str = "user",
         session_id: Optional[str] = None,
         max_retries: Optional[int] = None,
+        skip_execution: bool = False,
     ) -> QueryResponse:
         """
         执行自然语言查询
@@ -226,9 +227,13 @@ class AskService:
             ctx.steps_timing["sql_validation_ms"] = int(timer.elapsed * 1000)
 
         # ========== 步骤 6: SQL 执行 ==========
-        with track_duration("sql_execution") as timer:
-            ctx.query_result = await self._execute_sql(ctx.validated_sql)
-            ctx.steps_timing["sql_execution_ms"] = int(timer.elapsed * 1000)
+        if skip_execution:
+            ctx.query_result = []
+            ctx.steps_timing["sql_execution_ms"] = 0
+        else:
+            with track_duration("sql_execution") as timer:
+                ctx.query_result = await self._execute_sql(ctx.validated_sql)
+                ctx.steps_timing["sql_execution_ms"] = int(timer.elapsed * 1000)
 
         # ========== 步骤 7: 数据脱敏 ==========
         with track_duration("data_masking") as timer:
@@ -248,7 +253,7 @@ class AskService:
             columns=[],
             row_count=len(ctx.query_result) if ctx.query_result else 0,
             chart=None,
-            summary=self._build_summary(ctx),
+            summary=self._build_summary(ctx, skip_execution),
             session_id=ctx.session_id,
             execution_time_ms=total_time,
             steps_timing=ctx.steps_timing,
@@ -271,12 +276,14 @@ class AskService:
                 sql=sql,
             )
 
-    def _build_summary(self, ctx: PipelineContext) -> str:
+    def _build_summary(self, ctx: PipelineContext, skip_execution: bool = False) -> str:
         """构建结果摘要"""
         if ctx.error:
             return f"查询失败: {ctx.error}"
 
         row_count = len(ctx.query_result) if ctx.query_result else 0
+        if skip_execution:
+            row_count = 0
         intent = ctx.intent.intent.value if ctx.intent else "query"
 
         return f"查询成功，识别为【{intent}】，返回 {row_count} 行数据"

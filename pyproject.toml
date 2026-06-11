@@ -32,6 +32,7 @@ dependencies = [
     "sqlalchemy>=2.0.25",
     "asyncpg>=0.29.0",
     "aiomysql>=0.2.0",
+    "aiosqlite>=0.19.0",
     "psycopg2-binary>=2.9.9",
     "pymysql>=1.1.0",
 
@@ -46,6 +47,10 @@ dependencies = [
     # 配置
     "pyyaml>=6.0",
     "python-dotenv>=1.0.0",
+
+    # JWT 认证
+    "python-jose[cryptography]>=3.3.0",
+    "passlib[bcrypt]>=1.7.4",
 
     # CLI
     "typer>=0.12.0",

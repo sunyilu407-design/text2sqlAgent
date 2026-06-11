@@ -13,7 +13,7 @@ from typing import Optional, Any
 from dataclasses import dataclass
 
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, update, delete, and_, or_
+from sqlalchemy import select, update, delete, and_, or_, func
 from sqlalchemy.orm import Session
 
 from micro_genbi.database.models import (
@@ -624,3 +624,201 @@ class QueryHistoryService:
             .offset(offset)
         )
         return list(result.scalars().all())
+
+    async def list_all(
+        self,
+        tenant_id: str,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> tuple[list[QueryHistory], int]:
+        """获取租户的所有查询历史"""
+        # 总数
+        count_result = await self.session.execute(
+            select(QueryHistory.id)
+            .where(QueryHistory.tenant_id == tenant_id)
+        )
+        total = len(count_result.scalars().all())
+
+        # 分页数据
+        result = await self.session.execute(
+            select(QueryHistory)
+            .where(QueryHistory.tenant_id == tenant_id)
+            .order_by(QueryHistory.created_at.desc())
+            .limit(limit)
+            .offset(offset)
+        )
+        return list(result.scalars().all()), total
+
+    async def delete(self, history_id: str) -> bool:
+        """删除历史记录"""
+        result = await self.session.execute(
+            delete(QueryHistory).where(QueryHistory.id == history_id)
+        )
+        await self.session.commit()
+        return result.rowcount > 0
+
+
+class AuditLogService:
+    """审计日志服务（查询端）"""
+
+    def __init__(self, session: AsyncSession):
+        self.session = session
+
+    async def list_logs(
+        self,
+        tenant_id: Optional[str] = None,
+        user_id: Optional[str] = None,
+        event_type: Optional[str] = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> tuple[list[AuditLog], int]:
+        """查询审计日志"""
+        conditions = []
+        if tenant_id:
+            conditions.append(AuditLog.tenant_id == tenant_id)
+        if user_id:
+            conditions.append(AuditLog.user_id == user_id)
+        if event_type:
+            conditions.append(AuditLog.event_type == event_type)
+
+        where_clause = and_(*conditions) if conditions else True
+
+        # 总数
+        count_result = await self.session.execute(
+            select(AuditLog.id).where(where_clause)
+        )
+        total = len(count_result.scalars().all())
+
+        result = await self.session.execute(
+            select(AuditLog)
+            .where(where_clause)
+            .order_by(AuditLog.created_at.desc())
+            .limit(limit)
+            .offset(offset)
+        )
+        return list(result.scalars().all()), total
+
+    async def get_stats(self, tenant_id: Optional[str] = None) -> dict:
+        """获取审计统计"""
+        from datetime import datetime, timedelta
+
+        now = datetime.utcnow()
+        day_ago = now - timedelta(days=1)
+
+        base = select(AuditLog).where(AuditLog.tenant_id == tenant_id) if tenant_id else select(AuditLog)
+
+        total_result = await self.session.execute(base)
+        total_logs = len(total_result.scalars().all())
+
+        # 失败/阻断/成功
+        failed_result = await self.session.execute(
+            select(AuditLog).where(and_(base.whereclause, AuditLog.result == "failed"))
+        )
+        blocked_result = await self.session.execute(
+            select(AuditLog).where(and_(base.whereclause, AuditLog.result == "blocked"))
+        )
+        login_result = await self.session.execute(
+            select(AuditLog).where(
+                and_(base.whereclause, AuditLog.event_type.like("%login%"))
+            )
+        )
+        last24_result = await self.session.execute(
+            select(AuditLog).where(
+                and_(base.whereclause, AuditLog.created_at >= day_ago)
+            )
+        )
+
+        # 按类型统计
+        type_result = await self.session.execute(
+            select(AuditLog.event_type, func.count(AuditLog.id))
+            .where(base.whereclause if base.whereclause is not None else True)
+            .group_by(AuditLog.event_type)
+            .limit(10)
+        )
+
+        return {
+            "totalEvents": total_logs,
+            "failedLogins": len(failed_result.scalars().all()),
+            "blockedQueries": len(blocked_result.scalars().all()),
+            "sqlInjections": 0,
+            "last24h": {
+                "logins": len(login_result.scalars().all()),
+                "queries": len(last24_result.scalars().all()),
+                "failures": len([
+                    l for l in last24_result.scalars().all() if l.result == "failed"
+                ]),
+            },
+        }
+
+
+class UserManagementService:
+    """用户管理服务（用于 admin 后台）"""
+
+    def __init__(self, session: AsyncSession):
+        self.session = session
+
+    async def list_users(
+        self,
+        tenant_id: Optional[str] = None,
+        role: Optional[str] = None,
+        status: Optional[str] = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> tuple[list[User], int]:
+        """列出用户"""
+        conditions = []
+        if tenant_id:
+            conditions.append(User.tenant_id == tenant_id)
+        if role:
+            conditions.append(User.role == role)
+        if status == "active":
+            conditions.append(User.is_active == True)
+        elif status == "suspended":
+            conditions.append(User.is_active == False)
+
+        where_clause = and_(*conditions) if conditions else True
+
+        # 总数
+        count_result = await self.session.execute(select(User.id).where(where_clause))
+        total = len(count_result.scalars().all())
+
+        result = await self.session.execute(
+            select(User)
+            .where(where_clause)
+            .order_by(User.created_at.desc())
+            .limit(limit)
+            .offset(offset)
+        )
+        return list(result.scalars().all()), total
+
+    async def update_user(self, user_id: str, **updates) -> Optional[User]:
+        """更新用户"""
+        result = await self.session.execute(
+            update(User).where(User.id == user_id).values(**updates)
+        )
+        await self.session.commit()
+        if result.rowcount == 0:
+            return None
+        user_result = await self.session.execute(select(User).where(User.id == user_id))
+        return user_result.scalar_one_or_none()
+
+    async def delete_user(self, user_id: str) -> bool:
+        """删除用户（软删除）"""
+        result = await self.session.execute(
+            update(User).where(User.id == user_id).values(is_active=False)
+        )
+        await self.session.commit()
+        return result.rowcount > 0
+
+    async def reset_password(self, user_id: str) -> str:
+        """重置用户密码（生成随机密码）"""
+        import secrets
+        new_password = secrets.token_urlsafe(12)  # 生成 16 字符随机密码
+        password_hash = self._hash_password(new_password)
+        result = await self.session.execute(
+            update(User).where(User.id == user_id).values(password_hash=password_hash)
+        )
+        await self.session.commit()
+        if result.rowcount == 0:
+            return None
+        return new_password

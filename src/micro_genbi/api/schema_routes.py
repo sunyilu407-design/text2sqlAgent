@@ -32,7 +32,7 @@ from micro_genbi.db.schema_extractor import SchemaExtractor
 from micro_genbi.db.engine import get_engine
 
 logger = get_logger(__name__)
-router = APIRouter(prefix="/api/v1/schema", tags=["Schema 管理"])
+router = APIRouter(prefix="/schema", tags=["Schema 管理"])
 
 
 # =============================================================================
@@ -159,7 +159,7 @@ async def extract_schema(
     if not tenant_id:
         raise HTTPException(status_code=401, detail="未登录")
 
-    async for session in get_db_session():
+    async with get_db_session() as session:
         db_service = DatabaseConnectionService(session)
         conn = await db_service.get_by_id(connection_id)
 
@@ -198,7 +198,7 @@ async def extract_table_schema(
     if not tenant_id:
         raise HTTPException(status_code=401, detail="未登录")
 
-    async for session in get_db_session():
+    async with get_db_session() as session:
         db_service = DatabaseConnectionService(session)
         conn = await db_service.get_by_id(connection_id)
 
@@ -246,7 +246,7 @@ async def export_yaml(
     if not tenant_id:
         raise HTTPException(status_code=401, detail="未登录")
 
-    async for session in get_db_session():
+    async with get_db_session() as session:
         db_service = DatabaseConnectionService(session)
         conn = await db_service.get_by_id(connection_id)
 
@@ -291,7 +291,7 @@ async def get_er_diagram(
     if not tenant_id:
         raise HTTPException(status_code=401, detail="未登录")
 
-    async for session in get_db_session():
+    async with get_db_session() as session:
         db_service = DatabaseConnectionService(session)
         conn = await db_service.get_by_id(connection_id)
 
@@ -361,7 +361,7 @@ async def create_relation(
         raise HTTPException(status_code=401, detail="未登录")
 
     # 验证两个连接都存在且属于同一租户
-    async for session in get_db_session():
+    async with get_db_session() as session:
         db_service = DatabaseConnectionService(session)
         src_conn = await db_service.get_by_id(relation.source_connection_id)
         tgt_conn = await db_service.get_by_id(relation.target_connection_id)
@@ -420,7 +420,7 @@ async def list_relations(
     if not tenant_id:
         raise HTTPException(status_code=401, detail="未登录")
 
-    async for session in get_db_session():
+    async with get_db_session() as session:
         rel_service = CrossDBRelationService(session)
         relations = await rel_service.list_relations(tenant_id, connection_id)
         return [
@@ -458,7 +458,7 @@ async def delete_relation(
     if not tenant_id:
         raise HTTPException(status_code=401, detail="未登录")
 
-    async for session in get_db_session():
+    async with get_db_session() as session:
         rel_service = CrossDBRelationService(session)
         relation = await rel_service.get_relation(relation_id)
         if not relation or relation.tenant_id != tenant_id:
@@ -485,7 +485,7 @@ async def create_group(
     if not tenant_id:
         raise HTTPException(status_code=401, detail="未登录")
 
-    async for session in get_db_session():
+    async with get_db_session() as session:
         grp_service = ConnectionGroupService(session)
         result = await grp_service.create_group(CreateGroupInput(
             tenant_id=tenant_id,
@@ -523,7 +523,7 @@ async def list_groups(
     if not tenant_id:
         raise HTTPException(status_code=401, detail="未登录")
 
-    async for session in get_db_session():
+    async with get_db_session() as session:
         grp_service = ConnectionGroupService(session)
         groups = await grp_service.list_groups(tenant_id, project_id)
         results = []
@@ -558,7 +558,7 @@ async def add_group_member(
     if not tenant_id:
         raise HTTPException(status_code=401, detail="未登录")
 
-    async for session in get_db_session():
+    async with get_db_session() as session:
         grp_service = ConnectionGroupService(session)
         db_service = DatabaseConnectionService(session)
 
@@ -598,7 +598,7 @@ async def list_group_members(
     if not tenant_id:
         raise HTTPException(status_code=401, detail="未登录")
 
-    async for session in get_db_session():
+    async with get_db_session() as session:
         grp_service = ConnectionGroupService(session)
         db_service = DatabaseConnectionService(session)
 
@@ -637,7 +637,7 @@ async def remove_group_member(
     if not tenant_id:
         raise HTTPException(status_code=401, detail="未登录")
 
-    async for session in get_db_session():
+    async with get_db_session() as session:
         grp_service = ConnectionGroupService(session)
         group = await grp_service.get_group(group_id)
         if not group or group.tenant_id != tenant_id:
@@ -662,7 +662,7 @@ async def delete_group(
     if not tenant_id:
         raise HTTPException(status_code=401, detail="未登录")
 
-    async for session in get_db_session():
+    async with get_db_session() as session:
         grp_service = ConnectionGroupService(session)
         group = await grp_service.get_group(group_id)
         if not group or group.tenant_id != tenant_id:

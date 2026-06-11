@@ -66,7 +66,7 @@ services:
       retries: 5
     restart: unless-stopped
 
-  # 可选：Redis 缓存
+  # Redis 缓存（可选，启动时需加 --profile with-redis）
   redis:
     image: redis:7-alpine
     container_name: microgenbi-redis
@@ -82,23 +82,6 @@ services:
     restart: unless-stopped
     profiles:
       - with-redis
-
-  # 可选：Streamlit UI
-  ui:
-    build:
-      context: ..
-      dockerfile: docker/Dockerfile
-    container_name: microgenbi-ui
-    command: streamlit run src/micro_genbi/ui/streamlit_app.py --server.port 8501 --server.address 0.0.0.0
-    ports:
-      - "8501:8501"
-    environment:
-      - API_BASE_URL=http://api:8000
-    depends_on:
-      - api
-    restart: unless-stopped
-    profiles:
-      - with-ui
 
 volumes:
   postgres_data:

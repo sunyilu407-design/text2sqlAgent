@@ -1,7 +1,7 @@
 # Micro-GenBI 完整 RESTful API 规范
 
-> 版本：v2.2
-> 日期：2026-05-25
+> 版本：v2.3
+> 日期：2026-05-28
 > 基础路径：`/api/v1`
 
 ---
@@ -1522,20 +1522,180 @@ for page in range(1, total_pages + 1):
 
 ---
 
-## 六、SDK 客户端库（待开发）
+## 六、SDK 客户端库
 
-计划提供官方 SDK 客户端库：
+> **状态说明**：API Spec 中提供了 .NET (WinForms/WPF) 和 Java (Spring Boot) 的完整客户端实现代码示例，这些代码块可直接集成到桌面/Web 项目中。Python / TypeScript SDK 尚未封装为独立安装包。
 
-| 语言 | 仓库 | 状态 |
-|------|------|------|
-| Python | `pip install microgenbi` | 规划中 |
-| .NET | `dotnet add package MicroGenBI.Client` | 规划中 |
-| Java | `com.microgenbi:microgenbi-client` | 规划中 |
-| TypeScript | `npm install microgenbi-client` | 规划中 |
+| 语言 | 集成方式 | 状态 |
+|------|---------|------|
+| .NET (C#) | 代码示例：第 138-632 行 | ✅ 示例代码完整，可直接集成 |
+| Java | 代码示例：第 731-1252 行 | ✅ 示例代码完整，可直接集成 |
+| TypeScript/Vue | 代码示例：第 1254-1432 行 | ✅ 示例代码完整，可直接集成 |
+| Python | `pip install microgenbi` | ⏳ 规划中（API 端点已实现，客户端封装待开发） |
+| JavaScript | `npm install microgenbi-client` | ⏳ 规划中 |
 
 ---
 
-*本文档为 Micro-GenBI 完整的 RESTful API 规范，涵盖所有已规划的功能接口。*
+## 七、API 端点实现状态
+
+### 7.1 已实现端点（完整实现）
+
+以下端点在后端 `src/micro_genbi/api/` 中有完整实现：
+
+#### 认证 (`/api/v1/auth/*`)
+
+| 端点 | 方法 | 后端路由文件 | 状态 |
+|------|------|-------------|------|
+| `/auth/login` | POST | `auth_routes.py` | ✅ |
+| `/auth/refresh` | POST | `auth_routes.py` | ✅ |
+| `/auth/me` | GET | `auth_routes.py` | ✅ |
+| `/auth/register` | POST | `auth_routes.py` | ✅ |
+
+#### 核心查询 (`/api/v1/query/*`)
+
+| 端点 | 方法 | 后端路由文件 | 状态 |
+|------|------|-------------|------|
+| `/query` | POST | `routes.py` | ✅ |
+| `/query/multi` | POST | `routes.py` | ✅ |
+| `/query/async` | POST | `routes.py` | ✅ |
+| `/query/async/{task_id}` | GET | `routes.py` | ✅ |
+| `/query/async/{task_id}/stream` | GET | `routes.py` | ✅ |
+| `/query/async/{task_id}` | DELETE | `routes.py` | ✅ |
+
+#### Schema (`/api/v1/schema/*`)
+
+| 端点 | 方法 | 后端路由文件 | 状态 |
+|------|------|-------------|------|
+| `/schema` | GET | `schema_routes.py` | ✅ |
+| `/schema/refresh` | POST | `routes.py` | ✅ |
+| `/schema/test-connection` | POST | `routes.py` | ✅ |
+| `/schema/extract/{connection_id}` | GET | `schema_routes.py` | ✅ |
+| `/schema/{connection_id}` | GET | `schema_routes.py` | ✅ |
+| `/schema/{connection_id}/tables` | GET | `schema_routes.py` | ✅ |
+| `/schema/{connection_id}/tables/{table}/columns` | GET | `schema_routes.py` | ✅ |
+| `/schema/{connection_id}/tables/{table}/sample` | GET | `schema_routes.py` | ✅ |
+
+#### 预览 (`/api/v1/preview/*`)
+
+| 端点 | 方法 | 后端路由文件 | 状态 |
+|------|------|-------------|------|
+| `/preview` | POST | `preview_routes.py` | ✅ |
+| `/preview/{query_id}` | GET | `preview_routes.py` | ✅ |
+
+#### 会话 (`/api/v1/sessions/*`)
+
+| 端点 | 方法 | 后端路由文件 | 状态 |
+|------|------|-------------|------|
+| `/sessions` | GET | `routes.py` | ✅ |
+| `/sessions/{session_id}` | GET | `routes.py` | ✅ |
+| `/sessions/{session_id}/continue` | POST | `routes.py` | ✅ |
+
+#### 查询历史
+
+| 端点 | 方法 | 后端路由文件 | 状态 |
+|------|------|-------------|------|
+| `/history` | GET | `routes.py` | ✅ SQLite 持久化 |
+| `/history/{record_id}/favorite` | POST | `routes.py` | ✅ |
+| `/history/{record_id}` | DELETE | `routes.py` | ✅ |
+| `/history/{record_id}/versions` | GET | `routes.py` | ✅ |
+| `/history/{record_id}/rollback` | POST | `routes.py` | ✅ |
+| `/query/suggestions` | GET | `routes.py` | ✅ |
+| `/registry` | GET | `routes.py` | ✅ |
+
+#### 导出 (`/api/v1/export/*`)
+
+| 端点 | 方法 | 后端路由文件 | 状态 |
+|------|------|-------------|------|
+| `/export` | POST | `routes.py` | ✅ DataExporter 集成 |
+| `/export/{export_id}` | GET | `routes.py` | ✅ |
+| `/export/{export_id}/download` | GET | `routes.py` | ✅ |
+
+#### 图表 (`/api/v1/chart/*`)
+
+| 端点 | 方法 | 后端路由文件 | 状态 |
+|------|------|-------------|------|
+| `/chart/recommend` | POST | `routes.py` | ✅ |
+
+#### 管理 (`/api/v1/admin/*`)
+
+| 端点 | 方法 | 后端路由文件 | 状态 |
+|------|------|-------------|------|
+| `/admin/users` | GET/PUT/DELETE | `admin_routes.py` | ✅ |
+| `/admin/users/{id}/reset-password` | POST | `admin_routes.py` | ✅ |
+| `/admin/audit/logs` | GET | `admin_routes.py` | ✅ |
+| `/admin/audit/stats` | GET | `admin_routes.py` | ✅ |
+| `/admin/cost` | GET | `admin_routes.py` | ✅ |
+| `/admin/cost/by-user` | GET | `admin_routes.py` | ✅ |
+| `/admin/cost/by-model` | GET | `admin_routes.py` | ✅ |
+| `/admin/performance/slow-queries` | GET | `admin_routes.py` | ✅ |
+| `/admin/performance/llm-metrics` | GET | `admin_routes.py` | ✅ |
+| `/admin/performance/query-trend` | GET | `admin_routes.py` | ✅ |
+| `/admin/security/alerts` | GET | `admin_routes.py` | ✅ |
+| `/admin/security/alerts/{id}/acknowledge` | POST | `admin_routes.py` | ✅ |
+| `/admin/security/failed-logins` | GET | `admin_routes.py` | ✅ |
+| `/admin/connections` | GET/POST/DELETE | `admin_routes.py` | ✅ |
+| `/admin/schema/search` | POST | `admin_routes.py` | ✅ |
+| `/admin/subscriptions` | GET/POST/PATCH/DELETE | `admin_routes.py` | ✅ |
+| `/admin/api-keys` | GET/POST/DELETE | `admin_routes.py` | ✅ |
+
+#### 配置 (`/api/v1/*`)
+
+| 端点 | 方法 | 后端路由文件 | 状态 |
+|------|------|-------------|------|
+| `/tenants` | GET/POST | `config_routes.py` | ✅ |
+| `/projects` | GET/POST/DELETE | `config_routes.py` | ✅ |
+| `/projects/with-connections` | GET | `config_routes.py` | ✅ |
+| `/users` | GET/POST | `config_routes.py` | ✅ |
+| `/llm-configs` | GET/POST/PUT/DELETE | `config_routes.py` | ✅ |
+| `/llm-configs/{id}/test` | POST | `config_routes.py` | ✅ |
+| `/connections` | GET/POST/DELETE | `config_routes.py` | ✅ |
+| `/connections/{id}/test` | POST | `config_routes.py` | ✅ |
+| `/api-keys` | GET/POST/DELETE | `config_routes.py` | ✅ |
+
+### 7.2 未实现端点（文档保留，待开发）
+
+以下端点在 API Spec 中有规格定义，但后端尚未实现，保留在文档中作为未来开发参考：
+
+| 端点 | 方法 | 原因 | 优先级 |
+|------|------|------|--------|
+| `/query/preview` | POST | 已有 `preview_routes.py` 基本实现，可扩展 | P2 |
+| `/schema` | PUT | Schema 配置保存 | P2 |
+| `/groups/{group_id}/dictionary` | GET/PUT | 业务字典管理 | P3 |
+| `/groups/{group_id}/dictionary/rebuild` | POST | 业务字典重建 | P3 |
+| `/groups/{group_id}/enum/inference` | GET | 枚举推断 | P3 |
+| `/groups/{group_id}/enum/confirm-batch` | POST | 枚举批量确认 | P3 |
+| `/sessions/{id}/export` | POST | 会话导出 | P3 |
+| `/admin/roles` | GET | 角色列表 | P3 |
+| `/groups` | GET/POST | 分组管理 | P3 |
+| `/groups/{id}/members` | GET/POST | 分组成员 | P3 |
+| `/admin/llm/cost/export` | GET | 成本报告导出 | P3 |
+| `/groups/{group_id}/cache/stats` | GET | 缓存统计 | P3 |
+| `/groups/{group_id}/cache/invalidate` | POST | 缓存失效 | P3 |
+| `/webhooks` | GET/POST | Webhook 管理 | P4 |
+| `/webhooks/{id}` | DELETE | Webhook 删除 | P4 |
+| `/webhooks/{id}/test` | POST | Webhook 测试 | P4 |
+
+> **说明**：以下端点已实现（从上方移至已实现列表）：
+> - `/history/{record_id}/favorite` ✅
+> - `/history/{record_id}/versions` ✅
+> - `/history/{record_id}/rollback` ✅
+> - `/query/suggestions` ✅
+> - `/sessions/{id}/continue` ✅
+> - `/export/{export_id}/download` ✅
+> - `/metrics` ✅ (Prometheus 格式)
+
+### 7.3 优先级说明
+
+| 优先级 | 说明 | 预计工作量 |
+|--------|------|-----------|
+| P1 | 核心功能缺失，影响用户体验 | 高 |
+| P2 | 重要增值功能，用户期待 | 中 |
+| P3 | 辅助功能，有则更好 | 低 |
+| P4 | 高级功能，可延后实现 | 低 |
+
+---
+
+*本文档为 Micro-GenBI 完整的 RESTful API 规范，已标注所有端点的实现状态。已实现端点可直接使用，未实现端点作为未来开发参考。*
 
 
 ### 1.1 认证接口

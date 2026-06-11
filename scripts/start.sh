@@ -1,5 +1,7 @@
 #!/bin/bash
-# Micro-GenBI 启动脚本
+# Micro-GenBI 快速启动脚本 (Linux/macOS)
+# 使用方法: ./scripts/start.sh
+# 会在后台启动 API 和 React 前端
 
 set -e
 
@@ -7,65 +9,94 @@ set -e
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
-NC='\033[0m' # No Color
+CYAN='\033[0;36m'
+NC='\033[0m'
 
-echo -e "${GREEN}========================================${NC}"
-echo -e "${GREEN}  Micro-GenBI 快速启动${NC}"
-echo -e "${GREEN}========================================${NC}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
+FRONTEND_DIR="$PROJECT_ROOT/fronted"
 
-# 检查 Python
-if ! command -v python3 &> /dev/null && ! command -v python &> /dev/null; then
-    echo -e "${RED}错误: 未找到 Python${NC}"
-    echo "请安装 Python 3.11 或更高版本"
-    exit 1
-fi
-
-PYTHON=$(command -v python3 || command -v python)
-echo -e "${GREEN}✓${NC} 使用 Python: $($PYTHON --version)"
-
-# 检查依赖
 echo ""
-echo "检查依赖..."
-if ! $PYTHON -c "import fastapi" 2>/dev/null; then
-    echo -e "${YELLOW}安装依赖...${NC}"
-    $PYTHON -m pip install -e ".[all]" -q
-fi
-
-echo -e "${GREEN}✓${NC} 依赖检查完成"
-
-# 初始化数据库（如果需要）
+echo -e "${CYAN}========================================${NC}"
+echo -e "${CYAN}  Micro-GenBI 快速启动${NC}"
+echo -e "${CYAN}========================================${NC}"
 echo ""
-if [ ! -f "microgenbi.db" ]; then
-    echo -e "${YELLOW}首次运行，初始化数据库...${NC}"
-    $PYTHON scripts/init_db.py --all
+
+# 检测虚拟环境
+if [ -f "$PROJECT_ROOT/venv/bin/python" ]; then
+    PYTHON="$PROJECT_ROOT/venv/bin/python"
+    echo -e "${GREEN}[VENV] 使用虚拟环境${NC}"
+elif [ -f "$PROJECT_ROOT/.venv/bin/python" ]; then
+    PYTHON="$PROJECT_ROOT/.venv/bin/python"
+    echo -e "${GREEN}[VENV] 使用虚拟环境${NC}"
 else
-    echo -e "${GREEN}✓${NC} 数据库已存在"
+    PYTHON=$(command -v python3 || command -v python)
+    echo -e "${YELLOW}[SYS] 使用系统 Python${NC}"
 fi
 
-# 启动服务
-echo ""
-echo -e "${GREEN}========================================${NC}"
-echo -e "${GREEN}启动服务...${NC}"
-echo -e "${GREEN}========================================${NC}"
-echo ""
-echo "API 服务: http://localhost:8000"
-echo "API 文档: http://localhost:8000/docs"
-echo "用户界面: http://localhost:8501"
-echo "管理后台: http://localhost:8502"
-echo ""
-echo "按 Ctrl+C 停止服务"
-echo ""
+echo -e "${GREEN}  Python: $($PYTHON --version)${NC}"
 
-# 启动 FastAPI
-$PYTHON -m uvicorn micro_genbi.api.main:app --reload --port 8000 &
+# 检查后端依赖
+echo ""
+echo "检查后端依赖..."
+if ! $PYTHON -c "import fastapi, uvicorn" 2>/dev/null; then
+    echo -e "${YELLOW}  正在安装依赖...${NC}"
+    $PYTHON -m pip install -e ".[all]" -q
+    if [ $? -ne 0 ]; then
+        echo -e "${RED}  依赖安装失败，请手动运行: pip install -e '.[all]'${NC}"
+        exit 1
+    fi
+    echo -e "${GREEN}  依赖安装完成${NC}"
+else
+    echo -e "${GREEN}  依赖已安装${NC}"
+fi
+
+# 检查前端依赖
+echo ""
+echo "检查前端依赖..."
+if [ ! -d "$FRONTEND_DIR/node_modules" ]; then
+    echo -e "${YELLOW}  正在安装前端依赖...${NC}"
+    (cd "$FRONTEND_DIR" && npm install)
+    if [ $? -ne 0 ]; then
+        echo -e "${RED}  前端依赖安装失败${NC}"
+        exit 1
+    fi
+    echo -e "${GREEN}  前端依赖安装完成${NC}"
+else
+    echo -e "${GREEN}  前端依赖已安装${NC}"
+fi
+
+# 启动 API 服务
+echo ""
+echo -e "${CYAN}启动 API 服务 (端口 8000)...${NC}"
+cd "$PROJECT_ROOT"
+$PYTHON -m uvicorn micro_genbi.api.main:app --reload --host 0.0.0.0 --port 8000 > /dev/null 2>&1 &
 API_PID=$!
+echo "  PID: $API_PID"
 
-# 等待一下
+# 等待 API 启动
 sleep 2
 
-# 启动 Streamlit 用户界面
-$PYTHON -m streamlit run src/micro_genbi/ui/user_app.py --server.port 8501 --server.address localhost &
-ST_PID=$!
+# 启动 React 前端
+echo -e "${CYAN}启动 React 前端 (端口 3000)...${NC}"
+cd "$FRONTEND_DIR"
+npm run dev > /dev/null 2>&1 &
+UI_PID=$!
+echo "  PID: $UI_PID"
 
-# 等待 Ctrl+C
+# 提示信息
+echo ""
+echo -e "${GREEN}========================================${NC}"
+echo -e "${GREEN}  服务已全部启动!${NC}"
+echo -e "${GREEN}========================================${NC}"
+echo ""
+echo -e "  ${CYAN}前端界面:${NC}   http://localhost:3000"
+echo -e "  ${CYAN}API 文档:${NC}   http://localhost:8000/docs"
+echo ""
+echo -e "${YELLOW}  停止服务: kill $API_PID $UI_PID${NC}"
+echo ""
+
+# 等待用户 Ctrl+C
+trap "echo ''; echo -e '${YELLOW}停止服务...${NC}'; kill $API_PID $UI_PID 2>/dev/null; exit 0" SIGINT SIGTERM
+
 wait

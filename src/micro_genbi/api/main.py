@@ -44,7 +44,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         from micro_genbi.database.cross_db_models import (
             CrossDBRelation, ConnectionGroup, ConnectionGroupMember,
         )
-        from micro_genbi.api.dependencies import _get_session_maker
+        from micro_genbi.api.dependencies import get_db_session, _get_session_maker
 
         # 确保所有表都已创建
         engine = _get_session_maker().kw.get("bind")
@@ -74,6 +74,40 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         logger.info("系统数据库初始化完成")
     except Exception as e:
         logger.warning(f"数据库初始化警告: {e}")
+
+    # 自动创建默认 admin 用户（如果不存在）
+    try:
+        from micro_genbi.database.services import TenantService, UserService
+        from micro_genbi.database import CreateTenantInput, CreateUserInput
+        import bcrypt
+
+        async with get_db_session() as session:
+            tenant_service = TenantService(session)
+            tenants = await tenant_service.list_all()
+            tenant = next((t for t in tenants if t.name == "系统运维处"), None)
+            if not tenant:
+                tenant = await tenant_service.create(
+                    CreateTenantInput(name="系统运维处", description="系统管理租户")
+                )
+                logger.info(f"自动创建默认租户: {tenant.name} (id={tenant.id})")
+
+            user_service = UserService(session)
+            admin_user = await user_service.get_by_username("admin")
+            if not admin_user:
+                admin = await user_service.create(
+                    input=CreateUserInput(
+                        username="admin",
+                        email="admin@microgenbi.cn",
+                        password="admin123",
+                        role="admin",
+                    ),
+                    tenant_id=tenant.id,
+                )
+                logger.info(f"自动创建默认管理员用户: admin / admin123 (id={admin.id})")
+            else:
+                logger.info("管理员用户已存在，跳过创建")
+    except Exception as e:
+        logger.warning(f"自动创建默认用户失败: {e}")
 
     yield
 
@@ -279,8 +313,8 @@ async def root():
 
 # 注册路由
 app.include_router(routes.router, prefix="/api/v1")
-app.include_router(config_routes.router)
-app.include_router(schema_routes.router)
+app.include_router(config_routes.router, prefix="/api/v1")
+app.include_router(schema_routes.router, prefix="/api/v1")
 app.include_router(preview_router)
 
 

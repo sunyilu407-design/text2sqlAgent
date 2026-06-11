@@ -1,0 +1,6 @@
+{
+  "name": "Micro-GenBI",
+  "description": "Visual Federated Multi-Database AI Analytics and Query Workbench Center.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

@@ -85,16 +85,15 @@ micro-genbi/
 │   │
 │   └── monitoring/          # 可观测性
 │       ├── logging.py
-│       └── metrics.py
+│       ├── metrics.py
+│       └── cache.py       # 三级缓存策略（SQL/LLM/Schema）
 │
 ├── tests/                   # 测试目录
 │   ├── unit/
 │   ├── integration/
 │   └── fixtures/
 │
-├── schema.yaml              # 语义配置（单库）
-├── schema_registry/          # 多库配置目录
-├── genbi_config.yaml       # 多库连接配置
+├── schema.yaml              # 语义配置（表别名、列描述、枚举值、跨库关系）
 └── pyproject.toml
 ```
 
@@ -148,11 +147,16 @@ raise to_retry(exc)
 
 | 需要了解的内容 | 参考文档 |
 |-------------|---------|
-| 完整架构设计 | `Micro-GenBI-Integration.md` |
-| 多库架构 | `Multi-Database-Architecture.md` |
-| WrenAI 源码移植 | `Micro-GenBI-WrenAI-Port-Guide.md` |
-| PRD 定义 | `GenBI_Integration_PRD.md` |
+| 完整架构设计 | `docs/Micro-GenBI-Integration.md` |
+| 多库架构 | `docs/Multi-Database-Architecture.md` |
+| WrenAI 源码移植 | `docs/Micro-GenBI-WrenAI-Port-Guide.md` |
+| PRD 定义 | `docs/GenBI_Integration_PRD.md` |
 | WrenAI 原始源码 | `WrenAI-wren-v0.7.0/` |
+| 三级缓存策略 | `docs/Micro-GenBI-Cache-Strategy.md` |
+| LLM 成本追踪 | `docs/Micro-GenBI-LLM-Cost-Tracker.md` |
+| Prompt 模板系统 | `docs/Micro-GenBI-Prompt-Engineering.md` |
+| 部署指南 | `DEPLOYMENT.md` |
+| 开发计划与完成状态 | `docs/Micro-GenBI-Dev-Plan.md` |
 
 ---
 
@@ -188,9 +192,10 @@ genbi config --validate
 ## 注意事项
 
 ### 1. 多库 vs 单库
-- 单库模式：使用 `schema.yaml`
-- 多库模式：使用 `schema_registry/` 目录 + `genbi_config.yaml`
-- 模式在启动时确定，运行时不切换
+- 所有配置均存储在系统数据库中（DatabaseConnection、SchemaConfig 等表）
+- `schema.yaml` 用于定义业务数据库的语义信息（表别名、列描述、枚举值等）
+- 查询模式（SINGLE / AGGREGATE / FEDERATED）由 MultiDatabaseRouter **根据查询内容动态决定**，无需预先指定
+- 多库关系在 schema.yaml 的 `cross_db_relations` 中配置
 
 ### 2. LLM 成本控制
 - IntentClassifier Layer 1 使用规则引擎（0 token）

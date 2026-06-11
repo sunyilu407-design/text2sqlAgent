@@ -61,6 +61,16 @@ async def get_db_session() -> AsyncIterator[AsyncSession]:
 
 
 # =============================================================================
+# JWT 配置
+# =============================================================================
+
+def _get_jwt_secret() -> str:
+    """获取 JWT 密钥"""
+    secret = os.getenv("JWT_SECRET", "micro-genbi-dev-secret-change-in-production")
+    return secret
+
+
+# =============================================================================
 # 认证
 # =============================================================================
 
@@ -74,9 +84,10 @@ async def get_current_user(
     """
     获取当前用户
 
-    支持两种认证方式：
+    支持三种认证方式：
     1. Bearer Token（JWT）
     2. API Key
+    3. 直接传参（简化测试，仅开发环境）
 
     Returns:
         dict: 用户信息，包含 user_id, tenant_id, role 等
@@ -84,22 +95,20 @@ async def get_current_user(
     # 方式一：Bearer Token
     if authorization and authorization.startswith("Bearer "):
         token = authorization[7:]
-
-        # TODO: 验证 JWT Token
-        # 这里简化实现，实际应该验证 JWT
         try:
-            # 模拟解码 JWT（实际使用 PyJWT）
             user_info = _decode_jwt(token)
-            return user_info
+            if user_info:
+                return user_info
         except Exception:
-            raise HTTPException(
-                status_code=401,
-                detail="无效的 Token",
-            )
+            pass
+        raise HTTPException(
+            status_code=401,
+            detail="无效的 Token",
+        )
 
     # 方式二：API Key
     if x_api_key:
-        async for session in get_db_session():
+        async with get_db_session() as session:
             service = APIKeyService(session)
             api_key = await service.verify(x_api_key)
 
@@ -116,7 +125,7 @@ async def get_current_user(
                 "scope": api_key.scope,
             }
 
-    # 方式三：直接传参（简化测试）
+    # 方式三：直接传参（仅开发环境）
     if x_user_id:
         return {
             "user_id": x_user_id,
@@ -131,28 +140,27 @@ async def get_current_user(
     )
 
 
-def _decode_jwt(token: str) -> dict:
-    """解码 JWT Token（简化实现）"""
-    import base64
-    import json
-
-    # JWT 格式: header.payload.signature
-    parts = token.split(".")
-    if len(parts) != 3:
-        raise ValueError("Invalid JWT format")
-
-    # 解码 payload
-    payload = parts[1]
-    # 添加 padding
-    payload += "=" * (4 - len(payload) % 4)
-    decoded = base64.urlsafe_b64decode(payload)
-    data = json.loads(decoded)
-
-    return {
-        "user_id": data.get("sub"),
-        "tenant_id": data.get("tenant_id", "default"),
-        "role": data.get("role", "user"),
-    }
+def _decode_jwt(token: str) -> Optional[dict]:
+    """解码并验证 JWT Token"""
+    import time
+    try:
+        from jose import jwt, JWTError
+        payload = jwt.decode(
+            token,
+            _get_jwt_secret(),
+            algorithms=["HS256"],
+        )
+        # 检查过期
+        exp = payload.get("exp", 0)
+        if exp < time.time():
+            return None  # Token 已过期，返回 None 由调用方处理
+        return {
+            "user_id": payload.get("sub"),
+            "tenant_id": payload.get("tenant_id", "default"),
+            "role": payload.get("role", "user"),
+        }
+    except JWTError:
+        return None
 
 
 def require_admin(user: dict = Depends(get_current_user)) -> dict:
